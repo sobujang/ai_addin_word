@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini AI Assistant</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" type="text/javascript"></script>
+  <link rel="stylesheet" href="taskpane.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- 로딩 화면 -->
+    <div id="loading-screen">
+      <div class="spinner"></div>
+      <p>Word 연결 중...</p>
+    </div>
+
+    <!-- 메인 콘텐츠 -->
+    <div id="main-content" class="hidden">
+
+      <!-- 헤더 -->
+      <div id="header">
+        <div class="header-title">
+          <span class="header-icon">✨</span>
+          <span>Gemini AI</span>
+        </div>
+        <div class="header-actions">
+          <button id="clear-btn" class="icon-btn" title="대화 초기화">🗑️</button>
+          <button id="settings-btn" class="icon-btn" title="설정">⚙️</button>
+        </div>
+      </div>
+
+      <!-- 설정 패널 -->
+      <div id="settings-panel" class="hidden">
+        <div class="settings-inner">
+          <h3>⚙️ 설정</h3>
+          <div class="form-group">
+            <label for="api-key-input">Gemini API 키</label>
+            <div class="input-with-toggle">
+              <input type="password" id="api-key-input" placeholder="AIzaSy...">
+              <button id="toggle-api-visibility" class="toggle-btn" title="표시/숨기기">👁</button>
+            </div>
+            <small><a href="https://aistudio.google.com" target="_blank">API 키 발급하기 →</a></small>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="google-search-toggle">
+              <span>Google 검색 연동</span>
+              <small class="hint">AI가 최신 정보를 검색합니다</small>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="track-changes-toggle">
+              <span>수정 추적 (Track Changes)</span>
+              <small class="hint">문서 삽입 시 변경 내용 추적</small>
+            </label>
+          </div>
+          <div class="settings-footer">
+            <button id="save-settings-btn" class="btn-primary">저장</button>
+            <button id="close-settings-btn" class="btn-secondary">닫기</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- API 키 경고 -->
+      <div id="api-warning" class="hidden">
+        <div class="warning-box">
+          <p>⚠️ Gemini API 키를 설정해주세요</p>
+          <button id="open-settings-from-warning" class="btn-primary btn-sm">⚙️ 설정 열기</button>
+        </div>
+      </div>
+
+      <!-- 채팅 영역 -->
+      <div id="chat-area">
+        <div id="messages">
+          <div class="welcome-msg">
+            <div class="welcome-icon">✨</div>
+            <p><strong>Gemini AI Assistant</strong></p>
+            <p>Word 문서 작성을 도와드립니다.<br>질문하거나 문서 편집을 요청해보세요.</p>
+            <ul class="tips">
+              <li>Word에서 텍스트 선택 후 <strong>선택 텍스트 포함</strong> 버튼으로 편집 요청</li>
+              <li><strong>단행본 정리</strong> 버튼으로 대화 내용을 문서화</li>
+              <li><strong>음성 업로드</strong>로 회의록 자동 생성</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- 타이핑 인디케이터 -->
+      <div id="typing-indicator" class="hidden">
+        <div class="typing-dots"><span></span><span></span><span></span></div>
+        <span>Gemini가 응답 중...</span>
+      </div>
+
+      <!-- 입력 영역 -->
+      <div id="input-area">
+        <div class="input-row">
+          <button id="get-selection-btn" class="context-btn" title="Word에서 선택한 텍스트 가져오기">
+            📎 선택 텍스트
+          </button>
+        </div>
+        <div class="textarea-wrapper">
+          <textarea
+            id="message-input"
+            placeholder="메시지 입력... (Enter: 전송, Shift+Enter: 줄바꿈)"
+            rows="2"
+          ></textarea>
+          <button id="send-btn" class="send-btn" title="전송">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+        <div id="action-buttons">
+          <button id="book-format-btn" class="action-btn">
+            📖 단행본 형식으로 정리
+          </button>
+          <button id="voice-upload-btn" class="action-btn">
+            🎙️ 음성 파일 업로드
+          </button>
+          <input
+            type="file"
+            id="audio-file-input"
+            accept=".mp3,.wav,.m4a,.flac,audio/mpeg,audio/wav,audio/mp4,audio/flac"
+            class="hidden"
+          >
+        </div>
+      </div>
+
+    </div><!-- /main-content -->
+
+    <!-- 미리보기 패널 (전체 오버레이) -->
+    <div id="preview-panel" class="hidden">
+      <div id="preview-header">
+        <span id="preview-title">미리보기</span>
+        <button id="close-preview-btn" class="icon-btn" title="닫기">✕</button>
+      </div>
+      <div id="preview-body">
+        <div id="preview-content"></div>
+      </div>
+      <div id="preview-footer">
+        <button id="insert-preview-btn" class="btn-primary">📄 Word에 삽입</button>
+        <button id="cancel-preview-btn" class="btn-secondary">취소</button>
+      </div>
+    </div>
+
+    <!-- 로딩 오버레이 -->
+    <div id="loading-overlay" class="hidden">
+      <div class="loading-box">
+        <div class="spinner"></div>
+        <p id="loading-text">처리 중...</p>
+      </div>
+    </div>
+
+    <!-- 토스트 알림 -->
+    <div id="toast" class="hidden"></div>
+
+  </div><!-- /app -->
+
+  <script src="taskpane.js"></script>
+</body>
+</html>

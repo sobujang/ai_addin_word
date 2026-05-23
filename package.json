@@ -1,0 +1,14 @@
+{
+  "name": "gemini-ai-word-addin",
+  "version": "1.0.0",
+  "description": "Microsoft Word AI Add-in powered by Google Gemini",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "postinstall": "node generate-icons.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "office-addin-dev-certs": "^1.11.0"
+  }
+}

@@ -1,0 +1,699 @@
+/* ========== Constants ========== */
+const API_BASE = 'https://generativelanguage.googleapis.com';
+const MODEL_CHAT = 'gemini-2.0-flash-lite';
+const MODEL_ADVANCED = 'gemini-2.0-flash';
+const STORAGE_KEY_API = 'gemini_api_key';
+const STORAGE_KEY_SEARCH = 'gemini_use_search';
+const STORAGE_KEY_TRACK = 'gemini_track_changes';
+
+/* ========== State ========== */
+let conversationHistory = []; // { role: 'user'|'model', parts: [{text}] }[]
+let currentPreviewText = '';
+let isProcessing = false;
+
+/* ========== Office.js Init ========== */
+Office.onReady(function (info) {
+  const loadingScreen = document.getElementById('loading-screen');
+  const mainContent = document.getElementById('main-content');
+
+  if (info.host === Office.HostType.Word) {
+    loadingScreen.style.display = 'none';
+    mainContent.classList.remove('hidden');
+    initApp();
+  } else {
+    loadingScreen.innerHTML =
+      '<p style="color:#a4262c;padding:20px;text-align:center">이 Add-in은 Microsoft Word 전용입니다.</p>';
+  }
+});
+
+/* ========== App Initialization ========== */
+function initApp() {
+  loadSettings();
+  checkApiKey();
+  bindEvents();
+}
+
+function loadSettings() {
+  const key = localStorage.getItem(STORAGE_KEY_API) || '';
+  const search = localStorage.getItem(STORAGE_KEY_SEARCH) === 'true';
+  const track = localStorage.getItem(STORAGE_KEY_TRACK) === 'true';
+  document.getElementById('api-key-input').value = key;
+  document.getElementById('google-search-toggle').checked = search;
+  document.getElementById('track-changes-toggle').checked = track;
+}
+
+function saveSettings() {
+  const key = document.getElementById('api-key-input').value.trim();
+  const search = document.getElementById('google-search-toggle').checked;
+  const track = document.getElementById('track-changes-toggle').checked;
+  localStorage.setItem(STORAGE_KEY_API, key);
+  localStorage.setItem(STORAGE_KEY_SEARCH, search);
+  localStorage.setItem(STORAGE_KEY_TRACK, track);
+  closeSettings();
+  checkApiKey();
+  showToast('설정이 저장되었습니다.', 'success');
+}
+
+function getApiKey() { return localStorage.getItem(STORAGE_KEY_API) || ''; }
+function useSearch() { return localStorage.getItem(STORAGE_KEY_SEARCH) === 'true'; }
+function useTrackChanges() { return localStorage.getItem(STORAGE_KEY_TRACK) === 'true'; }
+
+function checkApiKey() {
+  const warning = document.getElementById('api-warning');
+  if (getApiKey()) {
+    warning.classList.add('hidden');
+  } else {
+    warning.classList.remove('hidden');
+  }
+}
+
+/* ========== Event Binding ========== */
+function bindEvents() {
+  // Header
+  document.getElementById('settings-btn').addEventListener('click', toggleSettings);
+  document.getElementById('clear-btn').addEventListener('click', clearConversation);
+
+  // Settings
+  document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
+  document.getElementById('close-settings-btn').addEventListener('click', closeSettings);
+  document.getElementById('open-settings-from-warning').addEventListener('click', openSettings);
+  document.getElementById('toggle-api-visibility').addEventListener('click', toggleApiVisibility);
+
+  // Chat
+  document.getElementById('send-btn').addEventListener('click', sendMessage);
+  document.getElementById('message-input').addEventListener('keydown', onInputKeydown);
+  document.getElementById('get-selection-btn').addEventListener('click', getWordSelection);
+
+  // Action buttons
+  document.getElementById('book-format-btn').addEventListener('click', formatAsBook);
+  document.getElementById('voice-upload-btn').addEventListener('click', () => {
+    document.getElementById('audio-file-input').click();
+  });
+  document.getElementById('audio-file-input').addEventListener('change', onAudioFileSelected);
+
+  // Preview panel
+  document.getElementById('close-preview-btn').addEventListener('click', closePreview);
+  document.getElementById('cancel-preview-btn').addEventListener('click', closePreview);
+  document.getElementById('insert-preview-btn').addEventListener('click', insertPreviewToDocument);
+}
+
+/* ========== Settings UI ========== */
+function toggleSettings() {
+  const panel = document.getElementById('settings-panel');
+  panel.classList.toggle('hidden');
+}
+function openSettings() {
+  document.getElementById('settings-panel').classList.remove('hidden');
+}
+function closeSettings() {
+  document.getElementById('settings-panel').classList.add('hidden');
+}
+function toggleApiVisibility() {
+  const input = document.getElementById('api-key-input');
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+/* ========== Chat ========== */
+function onInputKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+async function sendMessage() {
+  if (isProcessing) return;
+  const input = document.getElementById('message-input');
+  const text = input.value.trim();
+  if (!text) return;
+  if (!getApiKey()) {
+    openSettings();
+    showToast('API 키를 먼저 설정해주세요.', 'warning');
+    return;
+  }
+
+  input.value = '';
+  autoResizeTextarea(input);
+  isProcessing = true;
+  setSendButtonState(false);
+
+  addMessageToUI('user', text);
+  conversationHistory.push({ role: 'user', parts: [{ text }] });
+
+  showTypingIndicator();
+
+  try {
+    const responseText = await callGeminiAPI(conversationHistory, MODEL_CHAT, useSearch());
+    hideTypingIndicator();
+    addMessageToUI('assistant', responseText, true);
+    conversationHistory.push({ role: 'model', parts: [{ text: responseText }] });
+  } catch (err) {
+    hideTypingIndicator();
+    addErrorMessage(err.message);
+  } finally {
+    isProcessing = false;
+    setSendButtonState(true);
+    scrollChatToBottom();
+  }
+}
+
+function addMessageToUI(role, text, showActions = false) {
+  const messages = document.getElementById('messages');
+
+  // Remove welcome message on first real message
+  const welcome = messages.querySelector('.welcome-msg');
+  if (welcome) welcome.remove();
+
+  const wrapper = document.createElement('div');
+  wrapper.className = `message ${role}`;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.innerHTML = renderMarkdown(text);
+  wrapper.appendChild(bubble);
+
+  const time = document.createElement('div');
+  time.className = 'msg-time';
+  time.textContent = formatTime(new Date());
+  wrapper.appendChild(time);
+
+  if (role === 'assistant' && showActions) {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+
+    const copyBtn = makeActionBtn('📋 복사', () => copyToClipboard(text));
+    const insertBtn = makeActionBtn('📄 삽입', () => insertTextToDocument(text));
+    const replaceBtn = makeActionBtn('✏️ 선택 교체', () => replaceSelectionInDocument(text));
+
+    actions.append(copyBtn, insertBtn, replaceBtn);
+    wrapper.appendChild(actions);
+  }
+
+  messages.appendChild(wrapper);
+  scrollChatToBottom();
+}
+
+function addErrorMessage(msg) {
+  const messages = document.getElementById('messages');
+  const wrapper = document.createElement('div');
+  wrapper.className = 'message error';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = `⚠️ 오류: ${msg}`;
+  wrapper.appendChild(bubble);
+  messages.appendChild(wrapper);
+  scrollChatToBottom();
+}
+
+function makeActionBtn(label, onClick) {
+  const btn = document.createElement('button');
+  btn.className = 'msg-action-btn';
+  btn.textContent = label;
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
+function clearConversation() {
+  if (!confirm('대화 내용을 모두 지우시겠습니까?')) return;
+  conversationHistory = [];
+  const messages = document.getElementById('messages');
+  messages.innerHTML = `
+    <div class="welcome-msg">
+      <div class="welcome-icon">✨</div>
+      <p><strong>Gemini AI Assistant</strong></p>
+      <p>대화가 초기화되었습니다. 새로운 대화를 시작해보세요.</p>
+    </div>`;
+}
+
+/* ========== Word Selection ========== */
+async function getWordSelection() {
+  try {
+    const text = await getSelectedText();
+    if (!text || !text.trim()) {
+      showToast('Word에서 텍스트를 선택해주세요.', 'info');
+      return;
+    }
+    const input = document.getElementById('message-input');
+    const cursor = input.selectionStart;
+    const before = input.value.substring(0, cursor);
+    const after = input.value.substring(cursor);
+    const insertion = (before ? '\n\n' : '') + `[선택된 텍스트]\n${text.trim()}\n\n`;
+    input.value = before + insertion + after;
+    input.focus();
+    autoResizeTextarea(input);
+    showToast('선택한 텍스트가 입력창에 추가되었습니다.', 'info');
+  } catch (err) {
+    showToast('텍스트를 가져오지 못했습니다.', 'error');
+  }
+}
+
+function getSelectedText() {
+  return new Promise((resolve, reject) => {
+    Office.context.document.getSelectedDataAsync(
+      Office.CoercionType.Text,
+      (result) => {
+        if (result.status === Office.AsyncResultStatus.Succeeded) {
+          resolve(result.value);
+        } else {
+          reject(new Error(result.error.message));
+        }
+      }
+    );
+  });
+}
+
+/* ========== Document Insertion ========== */
+async function insertTextToDocument(text) {
+  try {
+    if (useTrackChanges()) {
+      await insertWithTrackChanges(text, false);
+    } else {
+      await setSelectedData(text);
+    }
+    showToast('Word에 삽입되었습니다.', 'success');
+  } catch (err) {
+    showToast(`삽입 실패: ${err.message}`, 'error');
+  }
+}
+
+async function replaceSelectionInDocument(text) {
+  try {
+    if (useTrackChanges()) {
+      await insertWithTrackChanges(text, true);
+    } else {
+      await setSelectedData(text);
+    }
+    showToast('선택 텍스트가 교체되었습니다.', 'success');
+  } catch (err) {
+    showToast(`교체 실패: ${err.message}`, 'error');
+  }
+}
+
+function setSelectedData(text) {
+  return new Promise((resolve, reject) => {
+    Office.context.document.setSelectedDataAsync(
+      text,
+      { coercionType: Office.CoercionType.Text },
+      (result) => {
+        if (result.status === Office.AsyncResultStatus.Succeeded) resolve();
+        else reject(new Error(result.error.message));
+      }
+    );
+  });
+}
+
+async function insertWithTrackChanges(text, replaceSelection) {
+  await Word.run(async (context) => {
+    context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
+    await context.sync();
+    const range = replaceSelection
+      ? context.document.getSelection()
+      : context.document.getSelection();
+    range.insertText(text, Word.InsertLocation.replace);
+    await context.sync();
+  });
+}
+
+/* ========== 단행본 형식으로 정리 ========== */
+async function formatAsBook() {
+  if (conversationHistory.length === 0) {
+    showToast('정리할 대화 내용이 없습니다.', 'warning');
+    return;
+  }
+  if (!getApiKey()) {
+    openSettings();
+    showToast('API 키를 먼저 설정해주세요.', 'warning');
+    return;
+  }
+
+  const convText = conversationHistory.map(msg => {
+    const role = msg.role === 'user' ? '사용자' : 'AI';
+    const text = msg.parts.map(p => p.text || '').join('');
+    return `${role}: ${text}`;
+  }).join('\n\n');
+
+  const prompt =
+    `아래는 특정 주제에 대한 대화 내용입니다.\n` +
+    `이 대화를 단행본 형식의 글로 정리해주세요.\n` +
+    `챕터와 소제목 구조로 구성하고, 자연스러운 문어체로 작성해주세요.\n\n` +
+    `[대화 내용]\n${convText}`;
+
+  showLoadingOverlay('단행본 형식으로 정리 중...');
+
+  try {
+    const result = await callGeminiAPI(
+      [{ role: 'user', parts: [{ text: prompt }] }],
+      MODEL_ADVANCED,
+      false
+    );
+    hideLoadingOverlay();
+    showPreview(result, '📖 단행본 형식 정리');
+  } catch (err) {
+    hideLoadingOverlay();
+    showToast(`오류: ${err.message}`, 'error');
+  }
+}
+
+/* ========== 음성 파일 업로드 → 회의록 ========== */
+function onAudioFileSelected(e) {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (file) processAudioFile(file);
+}
+
+async function processAudioFile(file) {
+  if (!getApiKey()) {
+    openSettings();
+    showToast('API 키를 먼저 설정해주세요.', 'warning');
+    return;
+  }
+
+  const SUPPORTED = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/flac', 'audio/x-m4a'];
+  const ext = file.name.split('.').pop().toLowerCase();
+  const supportedExt = ['mp3', 'wav', 'm4a', 'flac'];
+  if (!SUPPORTED.includes(file.type) && !supportedExt.includes(ext)) {
+    showToast('지원 형식: MP3, WAV, M4A, FLAC', 'warning');
+    return;
+  }
+
+  const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+  showLoadingOverlay(`파일 업로드 중... (${sizeMB}MB)`);
+
+  try {
+    // Step 1: Upload to Gemini Files API
+    const formData = new FormData();
+    const metadata = { file: { displayName: file.name } };
+    formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    formData.append('file', file);
+
+    const uploadResp = await fetch(
+      `${API_BASE}/upload/v1beta/files?key=${getApiKey()}`,
+      {
+        method: 'POST',
+        headers: { 'X-Goog-Upload-Protocol': 'multipart' },
+        body: formData
+      }
+    );
+
+    if (!uploadResp.ok) {
+      const errData = await uploadResp.json().catch(() => ({}));
+      throw new Error(errData.error?.message || `업로드 실패 (${uploadResp.status})`);
+    }
+
+    const { file: uploadedFile } = await uploadResp.json();
+
+    // Step 2: Wait for file to be ACTIVE (polling)
+    updateLoadingText('파일 처리 대기 중...');
+    await waitForFileActive(uploadedFile.name);
+
+    updateLoadingText('회의록 생성 중...');
+
+    // Step 3: Generate meeting minutes
+    const prompt =
+      `다음 음성 파일은 회의 녹음입니다.\n` +
+      `아래 형식으로 회의록을 작성해주세요:\n\n` +
+      `# 회의록\n` +
+      `- 일시: (파악 가능한 경우)\n` +
+      `- 참석자: (파악 가능한 경우)\n\n` +
+      `## 주요 논의사항\n` +
+      `(내용 정리)\n\n` +
+      `## 결정사항\n` +
+      `(결정된 내용)\n\n` +
+      `## 액션아이템\n` +
+      `- [ ] 담당자: 내용 (기한이 언급된 경우 포함)`;
+
+    const analysisResp = await fetch(
+      `${API_BASE}/v1beta/models/${MODEL_ADVANCED}:generateContent?key=${getApiKey()}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { fileData: { mimeType: uploadedFile.mimeType, fileUri: uploadedFile.uri } },
+              { text: prompt }
+            ]
+          }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 8192 }
+        })
+      }
+    );
+
+    if (!analysisResp.ok) {
+      const errData = await analysisResp.json().catch(() => ({}));
+      throw new Error(errData.error?.message || `분석 실패 (${analysisResp.status})`);
+    }
+
+    const data = await analysisResp.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!content) throw new Error('AI 응답을 받지 못했습니다.');
+
+    hideLoadingOverlay();
+    showPreview(content, '🎙️ 회의록');
+
+  } catch (err) {
+    hideLoadingOverlay();
+    showToast(`오류: ${err.message}`, 'error');
+  }
+}
+
+async function waitForFileActive(fileName, maxWaitMs = 120000) {
+  const interval = 3000;
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    await sleep(interval);
+    const resp = await fetch(
+      `${API_BASE}/v1beta/${fileName}?key=${getApiKey()}`
+    );
+    if (!resp.ok) break;
+    const data = await resp.json();
+    if (data.state === 'ACTIVE') return;
+    if (data.state === 'FAILED') throw new Error('파일 처리 실패');
+  }
+}
+
+/* ========== Gemini API ========== */
+async function callGeminiAPI(messages, model = MODEL_CHAT, withSearch = false) {
+  const key = getApiKey();
+  if (!key) throw new Error('API 키가 설정되지 않았습니다.');
+
+  const body = {
+    contents: messages,
+    generationConfig: {
+      temperature: 0.7,
+      topP: 0.95,
+      maxOutputTokens: 8192
+    }
+  };
+
+  if (withSearch) {
+    body.tools = [{ google_search: {} }];
+  }
+
+  const resp = await fetch(
+    `${API_BASE}/v1beta/models/${model}:generateContent?key=${key}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }
+  );
+
+  if (!resp.ok) {
+    const errData = await resp.json().catch(() => ({}));
+    const msg = errData.error?.message || `API 오류 (${resp.status})`;
+    throw new Error(msg);
+  }
+
+  const data = await resp.json();
+
+  // Handle grounding metadata (search results)
+  const candidate = data.candidates?.[0];
+  if (!candidate?.content?.parts?.[0]?.text) {
+    // Try to get text from any part
+    const allText = candidate?.content?.parts
+      ?.filter(p => p.text)
+      ?.map(p => p.text)
+      ?.join('');
+    if (allText) return allText;
+    throw new Error('AI 응답이 비어있습니다.');
+  }
+
+  return candidate.content.parts[0].text;
+}
+
+/* ========== Preview Panel ========== */
+function showPreview(text, title = '미리보기') {
+  currentPreviewText = text;
+  document.getElementById('preview-title').textContent = title;
+  document.getElementById('preview-content').innerHTML = renderMarkdown(text);
+  document.getElementById('preview-panel').classList.remove('hidden');
+}
+
+function closePreview() {
+  document.getElementById('preview-panel').classList.add('hidden');
+  currentPreviewText = '';
+}
+
+async function insertPreviewToDocument() {
+  if (!currentPreviewText) return;
+  try {
+    await insertTextToDocument(currentPreviewText);
+    closePreview();
+  } catch (err) {
+    showToast(`삽입 실패: ${err.message}`, 'error');
+  }
+}
+
+/* ========== Loading Overlay ========== */
+function showLoadingOverlay(text = '처리 중...') {
+  document.getElementById('loading-text').textContent = text;
+  document.getElementById('loading-overlay').classList.remove('hidden');
+}
+
+function updateLoadingText(text) {
+  document.getElementById('loading-text').textContent = text;
+}
+
+function hideLoadingOverlay() {
+  document.getElementById('loading-overlay').classList.add('hidden');
+}
+
+/* ========== Typing Indicator ========== */
+function showTypingIndicator() {
+  document.getElementById('typing-indicator').classList.remove('hidden');
+}
+function hideTypingIndicator() {
+  document.getElementById('typing-indicator').classList.add('hidden');
+}
+
+/* ========== Toast ========== */
+let toastTimer = null;
+function showToast(msg, type = 'info', durationMs = 3000) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.className = type;
+  toast.classList.remove('hidden');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.add('hidden'), durationMs);
+}
+
+/* ========== Send Button State ========== */
+function setSendButtonState(enabled) {
+  const btn = document.getElementById('send-btn');
+  btn.disabled = !enabled;
+}
+
+/* ========== Markdown Renderer ========== */
+function renderMarkdown(text) {
+  if (!text) return '';
+
+  let html = escapeHtml(text);
+
+  // Code blocks (must come before inline code)
+  html = html.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) =>
+    `<pre><code>${code.trim()}</code></pre>`
+  );
+
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Headings
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Horizontal rule
+  html = html.replace(/^---+$/gm, '<hr>');
+
+  // Bold and italic
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Blockquote
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // Task list items
+  html = html.replace(/^- \[ \] (.+)$/gm,
+    '<div class="task-item"><input type="checkbox" disabled> <span>$1</span></div>');
+  html = html.replace(/^- \[x\] (.+)$/gim,
+    '<div class="task-item"><input type="checkbox" checked disabled> <span>$1</span></div>');
+
+  // Unordered list items
+  html = html.replace(/^[-*] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>(\n|$))+/g, m => `<ul>${m}</ul>`);
+
+  // Ordered list items
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+
+  // Paragraphs: wrap consecutive non-tag lines
+  const lines = html.split('\n');
+  const result = [];
+  let inParagraph = false;
+
+  for (let line of lines) {
+    const isBlock = /^<(h[1-6]|ul|ol|li|pre|blockquote|hr|div)/.test(line) || line === '';
+    if (!isBlock) {
+      if (!inParagraph) { result.push('<p>'); inParagraph = true; }
+      result.push(line + ' ');
+    } else {
+      if (inParagraph) { result.push('</p>'); inParagraph = false; }
+      result.push(line);
+    }
+  }
+  if (inParagraph) result.push('</p>');
+
+  return result.join('\n');
+}
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/* ========== Utilities ========== */
+function scrollChatToBottom() {
+  const chatArea = document.getElementById('chat-area');
+  requestAnimationFrame(() => {
+    chatArea.scrollTop = chatArea.scrollHeight;
+  });
+}
+
+function autoResizeTextarea(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const input = document.getElementById('message-input');
+  if (input) input.addEventListener('input', () => autoResizeTextarea(input));
+});
+
+function formatTime(date) {
+  return date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text)
+    .then(() => showToast('클립보드에 복사되었습니다.', 'success'))
+    .catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('클립보드에 복사되었습니다.', 'success');
+    });
+}
