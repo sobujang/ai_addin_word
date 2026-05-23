@@ -1,6 +1,6 @@
 /* ========== Constants ========== */
 const API_BASE = 'https://generativelanguage.googleapis.com';
-const MODEL_CHAT = 'gemini-2.0-flash-lite';
+const MODEL_CHAT = 'gemini-2.0-flash';
 const MODEL_ADVANCED = 'gemini-2.0-flash';
 const STORAGE_KEY_API = 'gemini_api_key';
 const STORAGE_KEY_SEARCH = 'gemini_use_search';
