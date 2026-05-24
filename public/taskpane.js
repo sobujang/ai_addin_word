@@ -277,12 +277,21 @@ function getSelectedText() {
 }
 
 /* ========== Document Insertion ========== */
+function supportsWordApi(version) {
+  return !!(
+    typeof Office !== 'undefined' &&
+    Office.context.requirements &&
+    Office.context.requirements.isSetSupported('WordApi', version || '1.1')
+  );
+}
+
 async function insertTextToDocument(text) {
   try {
     await insertMarkdownAsWordFormatting(text, false, useTrackChanges());
     showToast('Word에 삽입되었습니다.', 'success');
   } catch (err) {
-    showToast(`삽입 실패: ${err.message}`, 'error');
+    showToast(`삽입 실패: ${err.message}`, 'error', 5000);
+    throw err;
   }
 }
 
@@ -291,7 +300,33 @@ async function replaceSelectionInDocument(text) {
     await insertMarkdownAsWordFormatting(text, true, useTrackChanges());
     showToast('선택 텍스트가 교체되었습니다.', 'success');
   } catch (err) {
-    showToast(`교체 실패: ${err.message}`, 'error');
+    showToast(`교체 실패: ${err.message}`, 'error', 5000);
+    throw err;
+  }
+}
+
+// Word Online 호환: body.insertText로 문서 끝에 삽입
+async function insertToWordDocument(text) {
+  if (supportsWordApi('1.1')) {
+    await Word.run(async (context) => {
+      context.document.body.insertText(text, Word.InsertLocation.end);
+      await context.sync();
+    });
+  } else {
+    await setSelectedData(text);
+  }
+}
+
+// Word Online 호환: 선택 영역을 replace로 교체
+async function replaceWordSelection(text) {
+  if (supportsWordApi('1.1')) {
+    await Word.run(async (context) => {
+      const selection = context.document.getSelection();
+      selection.insertText(text, Word.InsertLocation.replace);
+      await context.sync();
+    });
+  } else {
+    await setSelectedData(text);
   }
 }
 
@@ -562,6 +597,22 @@ function parseInlineMarkdown(text) {
   }
 
   return runs.length > 0 ? runs : [{ text: text, bold: false, italic: false, code: false }];
+}
+
+// 삽입 에러의 debugInfo를 미리보기 패널에 표시
+function showPreviewInsertError(err) {
+  const lines = [`⚠️ 삽입 실패: ${err.message}`];
+  if (err.debugInfo) {
+    lines.push('', '[디버그 정보]');
+    if (err.debugInfo.message) lines.push(`message: ${err.debugInfo.message}`);
+    if (err.debugInfo.errorLocation) lines.push(`location: ${err.debugInfo.errorLocation}`);
+    if (err.debugInfo.innerError) {
+      lines.push(`innerError: ${JSON.stringify(err.debugInfo.innerError)}`);
+    }
+  }
+  document.getElementById('preview-title').textContent = '⚠️ 삽입 오류';
+  document.getElementById('preview-content').textContent = lines.join('\n');
+  showToast(`삽입 실패: ${err.message}`, 'error', 5000);
 }
 
 /* ========== 단행본 형식으로 정리 ========== */
@@ -977,11 +1028,12 @@ async function insertPreviewToDocument() {
     if (currentPreviewMode === 'replace-body') {
       await replaceDocumentBody(currentPreviewText);
     } else {
-      await insertTextToDocument(currentPreviewText);
+      await insertMarkdownAsWordFormatting(currentPreviewText, false, useTrackChanges());
     }
+    showToast('Word에 삽입되었습니다.', 'success');
     closePreview();
   } catch (err) {
-    showToast(`삽입 실패: ${err.message}`, 'error');
+    showPreviewInsertError(err);
   }
 }
 
