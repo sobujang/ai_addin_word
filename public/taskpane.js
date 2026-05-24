@@ -283,20 +283,45 @@ async function replaceSelectionInDocument(text) {
 
 async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = false, trackChanges = false) {
   const paragraphs = parseMarkdownToWordParagraphs(markdownText);
+  console.log('[Insert] 단락 파싱 완료:', paragraphs.length, '개', paragraphs.map(p => p.type));
   if (paragraphs.length === 0) return;
 
   await Word.run(async (context) => {
+
+    // 1. 트랙 변경 모드
     if (trackChanges) {
-      context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
-      await context.sync();
+      try {
+        context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
+        await context.sync();
+        console.log('[Insert] 트랙 변경 모드 활성화');
+      } catch (e) {
+        console.error('[Insert] 트랙 변경 모드 오류:', e.message, e.code);
+      }
     }
 
-    let selection = context.document.getSelection();
-
-    if (replaceSelection) {
-      selection.delete();
-      await context.sync();
+    // 2. 선택 영역 가져오기
+    let selection;
+    try {
       selection = context.document.getSelection();
+      await context.sync();
+      console.log('[Insert] getSelection() 성공');
+    } catch (e) {
+      console.error('[Insert] getSelection() 오류:', e.message, e.code);
+      throw e;
+    }
+
+    // 3. 선택 영역 삭제 (교체 모드)
+    if (replaceSelection) {
+      try {
+        selection.delete();
+        await context.sync();
+        selection = context.document.getSelection();
+        await context.sync();
+        console.log('[Insert] 선택 영역 삭제 성공');
+      } catch (e) {
+        console.error('[Insert] selection.delete() 오류:', e.message, e.code);
+        throw e;
+      }
     }
 
     const styleMap = {
@@ -314,44 +339,86 @@ async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = f
 
     let ref = selection;
 
-    for (const para of paragraphs) {
-      const newPara = ref.insertParagraph('', Word.InsertLocation.after);
-      newPara.style = styleMap[para.type] || 'Normal';
+    for (let i = 0; i < paragraphs.length; i++) {
+      const para = paragraphs[i];
+      console.log(`[Insert] 단락 ${i} 처리 중 (type: ${para.type})`);
 
-      if (para.type === 'hr') {
-        const hrRange = newPara.insertText('─'.repeat(40), Word.InsertLocation.end);
-        hrRange.font.color = '#AAAAAA';
-      } else if (para.type === 'code') {
-        newPara.font.name = 'Courier New';
-        newPara.font.size = 10;
-        for (const run of para.runs) {
-          if (run.text) newPara.insertText(run.text, Word.InsertLocation.end);
-        }
-      } else if (para.type === 'blockquote') {
-        newPara.leftIndent = 36;
-        for (const run of para.runs) {
-          if (!run.text) continue;
-          const r = newPara.insertText(run.text, Word.InsertLocation.end);
-          r.font.italic = true;
-          if (run.bold) r.font.bold = true;
-        }
-      } else if (para.type !== 'empty') {
-        for (const run of para.runs) {
-          if (!run.text) continue;
-          const r = newPara.insertText(run.text, Word.InsertLocation.end);
-          if (run.bold) r.font.bold = true;
-          if (run.italic) r.font.italic = true;
-          if (run.code) {
-            r.font.name = 'Courier New';
-            r.font.size = 10;
+      // 4. 단락 삽입
+      let newPara;
+      try {
+        newPara = ref.insertParagraph('', Word.InsertLocation.after);
+        console.log(`[Insert] 단락 ${i} insertParagraph 성공`);
+      } catch (e) {
+        console.error(`[Insert] 단락 ${i} insertParagraph 오류:`, e.message, e.code);
+        throw e;
+      }
+
+      // 5. 스타일 적용
+      try {
+        newPara.style = styleMap[para.type] || 'Normal';
+        console.log(`[Insert] 단락 ${i} style='${newPara.style}' 설정`);
+      } catch (e) {
+        console.warn(`[Insert] 단락 ${i} style 오류 (Normal로 대체):`, e.message, e.code);
+        try { newPara.style = 'Normal'; } catch (_) {}
+      }
+
+      // 6. 내용 삽입
+      try {
+        if (para.type === 'hr') {
+          const hrRange = newPara.insertText('─'.repeat(40), Word.InsertLocation.end);
+          hrRange.font.color = '#AAAAAA';
+
+        } else if (para.type === 'code') {
+          newPara.font.name = 'Courier New';
+          newPara.font.size = 10;
+          for (const run of para.runs) {
+            if (run.text) newPara.insertText(run.text, Word.InsertLocation.end);
+          }
+
+        } else if (para.type === 'blockquote') {
+          try { newPara.leftIndent = 36; } catch (e) {
+            console.warn(`[Insert] leftIndent 오류:`, e.message, e.code);
+          }
+          for (const run of para.runs) {
+            if (!run.text) continue;
+            const r = newPara.insertText(run.text, Word.InsertLocation.end);
+            try { r.font.italic = true; } catch (_) {}
+            if (run.bold) { try { r.font.bold = true; } catch (_) {} }
+          }
+
+        } else if (para.type !== 'empty') {
+          for (const run of para.runs) {
+            if (!run.text) continue;
+            const r = newPara.insertText(run.text, Word.InsertLocation.end);
+            try {
+              if (run.bold) r.font.bold = true;
+              if (run.italic) r.font.italic = true;
+              if (run.code) {
+                r.font.name = 'Courier New';
+                r.font.size = 10;
+              }
+            } catch (e) {
+              console.warn(`[Insert] 단락 ${i} font 설정 오류:`, e.message, e.code, 'run:', run);
+            }
           }
         }
+        console.log(`[Insert] 단락 ${i} 내용 삽입 성공`);
+      } catch (e) {
+        console.error(`[Insert] 단락 ${i} 내용 삽입 오류:`, e.message, e.code, 'para:', para);
+        throw e;
       }
 
       ref = newPara;
     }
 
-    await context.sync();
+    // 7. 최종 sync
+    try {
+      await context.sync();
+      console.log('[Insert] 최종 context.sync() 성공');
+    } catch (e) {
+      console.error('[Insert] 최종 context.sync() 오류:', e.message, e.code, e.debugInfo);
+      throw e;
+    }
   });
 }
 
