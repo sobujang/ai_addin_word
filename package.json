@@ -5,6 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "dev": "node server.js",
+    "generate-icons": "node generate-icons.js",
     "postinstall": "node generate-icons.js"
   },
   "dependencies": {
