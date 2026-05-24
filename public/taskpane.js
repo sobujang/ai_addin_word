@@ -265,11 +265,7 @@ function getSelectedText() {
 /* ========== Document Insertion ========== */
 async function insertTextToDocument(text) {
   try {
-    if (useTrackChanges()) {
-      await insertWithTrackChanges(text, false);
-    } else {
-      await setSelectedData(text);
-    }
+    await insertMarkdownAsWordFormatting(text, false, useTrackChanges());
     showToast('Word에 삽입되었습니다.', 'success');
   } catch (err) {
     showToast(`삽입 실패: ${err.message}`, 'error');
@@ -278,40 +274,199 @@ async function insertTextToDocument(text) {
 
 async function replaceSelectionInDocument(text) {
   try {
-    if (useTrackChanges()) {
-      await insertWithTrackChanges(text, true);
-    } else {
-      await setSelectedData(text);
-    }
+    await insertMarkdownAsWordFormatting(text, true, useTrackChanges());
     showToast('선택 텍스트가 교체되었습니다.', 'success');
   } catch (err) {
     showToast(`교체 실패: ${err.message}`, 'error');
   }
 }
 
-function setSelectedData(text) {
-  return new Promise((resolve, reject) => {
-    Office.context.document.setSelectedDataAsync(
-      text,
-      { coercionType: Office.CoercionType.Text },
-      (result) => {
-        if (result.status === Office.AsyncResultStatus.Succeeded) resolve();
-        else reject(new Error(result.error.message));
+async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = false, trackChanges = false) {
+  const paragraphs = parseMarkdownToWordParagraphs(markdownText);
+  if (paragraphs.length === 0) return;
+
+  await Word.run(async (context) => {
+    if (trackChanges) {
+      context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
+      await context.sync();
+    }
+
+    let selection = context.document.getSelection();
+
+    if (replaceSelection) {
+      selection.delete();
+      await context.sync();
+      selection = context.document.getSelection();
+    }
+
+    const styleMap = {
+      h1: 'Heading 1',
+      h2: 'Heading 2',
+      h3: 'Heading 3',
+      h4: 'Heading 4',
+      bullet: 'List Bullet',
+      number: 'List Number',
+      normal: 'Normal',
+      code: 'Normal',
+      blockquote: 'Normal',
+      empty: 'Normal',
+    };
+
+    let ref = selection;
+
+    for (const para of paragraphs) {
+      const newPara = ref.insertParagraph('', Word.InsertLocation.after);
+      newPara.style = styleMap[para.type] || 'Normal';
+
+      if (para.type === 'hr') {
+        const hrRange = newPara.insertText('─'.repeat(40), Word.InsertLocation.end);
+        hrRange.font.color = '#AAAAAA';
+      } else if (para.type === 'code') {
+        newPara.font.name = 'Courier New';
+        newPara.font.size = 10;
+        for (const run of para.runs) {
+          if (run.text) newPara.insertText(run.text, Word.InsertLocation.end);
+        }
+      } else if (para.type === 'blockquote') {
+        newPara.leftIndent = 36;
+        for (const run of para.runs) {
+          if (!run.text) continue;
+          const r = newPara.insertText(run.text, Word.InsertLocation.end);
+          r.font.italic = true;
+          if (run.bold) r.font.bold = true;
+        }
+      } else if (para.type !== 'empty') {
+        for (const run of para.runs) {
+          if (!run.text) continue;
+          const r = newPara.insertText(run.text, Word.InsertLocation.end);
+          if (run.bold) r.font.bold = true;
+          if (run.italic) r.font.italic = true;
+          if (run.code) {
+            r.font.name = 'Courier New';
+            r.font.size = 10;
+          }
+        }
       }
-    );
+
+      ref = newPara;
+    }
+
+    await context.sync();
   });
 }
 
-async function insertWithTrackChanges(text, replaceSelection) {
-  await Word.run(async (context) => {
-    context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
-    await context.sync();
-    const range = replaceSelection
-      ? context.document.getSelection()
-      : context.document.getSelection();
-    range.insertText(text, Word.InsertLocation.replace);
-    await context.sync();
-  });
+function parseMarkdownToWordParagraphs(text) {
+  const lines = text.split('\n');
+  const result = [];
+  let inCodeBlock = false;
+  let codeLines = [];
+
+  for (const line of lines) {
+    if (line.trim().startsWith('```')) {
+      if (inCodeBlock) {
+        for (const cl of codeLines) {
+          result.push({ type: 'code', runs: [{ text: cl, bold: false, italic: false, code: false }] });
+        }
+        codeLines = [];
+        inCodeBlock = false;
+      } else {
+        inCodeBlock = true;
+      }
+      continue;
+    }
+
+    if (inCodeBlock) { codeLines.push(line); continue; }
+
+    if (!line.trim()) {
+      if (result.length > 0 && result[result.length - 1].type !== 'empty') {
+        result.push({ type: 'empty', runs: [] });
+      }
+      continue;
+    }
+
+    if (/^(---+|===+|\*\*\*+)$/.test(line.trim())) {
+      result.push({ type: 'hr', runs: [] });
+      continue;
+    }
+
+    const h4 = line.match(/^#### (.+)$/);
+    if (h4) { result.push({ type: 'h4', runs: parseInlineMarkdown(h4[1]) }); continue; }
+
+    const h3 = line.match(/^### (.+)$/);
+    if (h3) { result.push({ type: 'h3', runs: parseInlineMarkdown(h3[1]) }); continue; }
+
+    const h2 = line.match(/^## (.+)$/);
+    if (h2) { result.push({ type: 'h2', runs: parseInlineMarkdown(h2[1]) }); continue; }
+
+    const h1 = line.match(/^# (.+)$/);
+    if (h1) { result.push({ type: 'h1', runs: parseInlineMarkdown(h1[1]) }); continue; }
+
+    const taskUnchecked = line.match(/^[-*+] \[ \] (.+)$/);
+    if (taskUnchecked) {
+      result.push({ type: 'bullet', runs: [{ text: '☐ ', bold: false, italic: false, code: false }, ...parseInlineMarkdown(taskUnchecked[1])] });
+      continue;
+    }
+
+    const taskChecked = line.match(/^[-*+] \[x\] (.+)$/i);
+    if (taskChecked) {
+      result.push({ type: 'bullet', runs: [{ text: '☑ ', bold: false, italic: false, code: false }, ...parseInlineMarkdown(taskChecked[1])] });
+      continue;
+    }
+
+    const bullet = line.match(/^[-*+] (.+)$/);
+    if (bullet) { result.push({ type: 'bullet', runs: parseInlineMarkdown(bullet[1]) }); continue; }
+
+    const ordered = line.match(/^\d+\. (.+)$/);
+    if (ordered) { result.push({ type: 'number', runs: parseInlineMarkdown(ordered[1]) }); continue; }
+
+    const blockquote = line.match(/^> (.+)$/);
+    if (blockquote) { result.push({ type: 'blockquote', runs: parseInlineMarkdown(blockquote[1]) }); continue; }
+
+    result.push({ type: 'normal', runs: parseInlineMarkdown(line) });
+  }
+
+  if (inCodeBlock) {
+    for (const cl of codeLines) {
+      result.push({ type: 'code', runs: [{ text: cl, bold: false, italic: false, code: false }] });
+    }
+  }
+
+  while (result.length > 0 && result[result.length - 1].type === 'empty') result.pop();
+
+  return result;
+}
+
+function parseInlineMarkdown(text) {
+  const runs = [];
+  let rem = text;
+
+  while (rem.length > 0) {
+    const bim = rem.match(/^\*\*\*(.+?)\*\*\*/);
+    if (bim) { runs.push({ text: bim[1], bold: true, italic: true, code: false }); rem = rem.slice(bim[0].length); continue; }
+
+    const bm = rem.match(/^\*\*(.+?)\*\*/);
+    if (bm) { runs.push({ text: bm[1], bold: true, italic: false, code: false }); rem = rem.slice(bm[0].length); continue; }
+
+    const im = rem.match(/^\*(.+?)\*/);
+    if (im) { runs.push({ text: im[1], bold: false, italic: true, code: false }); rem = rem.slice(im[0].length); continue; }
+
+    const cm = rem.match(/^`([^`]+)`/);
+    if (cm) { runs.push({ text: cm[1], bold: false, italic: false, code: true }); rem = rem.slice(cm[0].length); continue; }
+
+    const next = rem.search(/\*\*\*|\*\*|\*|`/);
+    if (next === -1) {
+      runs.push({ text: rem, bold: false, italic: false, code: false });
+      rem = '';
+    } else if (next > 0) {
+      runs.push({ text: rem.slice(0, next), bold: false, italic: false, code: false });
+      rem = rem.slice(next);
+    } else {
+      runs.push({ text: rem[0], bold: false, italic: false, code: false });
+      rem = rem.slice(1);
+    }
+  }
+
+  return runs.length > 0 ? runs : [{ text: text, bold: false, italic: false, code: false }];
 }
 
 /* ========== 단행본 형식으로 정리 ========== */
