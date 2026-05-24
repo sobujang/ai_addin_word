@@ -288,12 +288,16 @@ async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = f
 
   await Word.run(async (context) => {
 
-    // 1. 트랙 변경 모드
+    // 1. 트랙 변경 모드 (삽입 후 원래 상태로 복구하기 위해 먼저 읽기)
+    let originalTrackingMode = null;
     if (trackChanges) {
       try {
+        context.document.load('changeTrackingMode');
+        await context.sync();
+        originalTrackingMode = context.document.changeTrackingMode;
         context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
         await context.sync();
-        console.log('[Insert] 트랙 변경 모드 활성화');
+        console.log('[Insert] 트랙 변경 모드 활성화 (원래 모드:', originalTrackingMode, ')');
       } catch (e) {
         console.error('[Insert] 트랙 변경 모드 오류:', e.message, e.code);
       }
@@ -411,7 +415,17 @@ async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = f
       ref = newPara;
     }
 
-    // 7. 최종 sync
+    // 7. 트랙 변경 모드 원래 상태로 복구
+    if (trackChanges && originalTrackingMode !== null) {
+      try {
+        context.document.changeTrackingMode = originalTrackingMode;
+        console.log('[Insert] 트랙 변경 모드 복구:', originalTrackingMode);
+      } catch (e) {
+        console.warn('[Insert] 트랙 변경 모드 복구 오류:', e.message);
+      }
+    }
+
+    // 8. 최종 sync
     try {
       await context.sync();
       console.log('[Insert] 최종 context.sync() 성공');
