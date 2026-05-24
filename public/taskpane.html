@@ -116,17 +116,16 @@
         </div>
         <div id="action-buttons">
           <button id="book-format-btn" class="action-btn">
-            📖 단행본 형식으로 정리
+            📖 단행본 정리
           </button>
           <button id="voice-upload-btn" class="action-btn">
-            🎙️ 음성 파일 업로드
+            🎙️ 음성 업로드
           </button>
-          <input
-            type="file"
-            id="audio-file-input"
-            accept=".mp3,.wav,.m4a,.flac,audio/mpeg,audio/wav,audio/mp4,audio/flac"
-            class="hidden"
-          >
+          <button id="doc-upload-btn" class="action-btn">
+            📄 문서 업로드
+          </button>
+          <input type="file" id="audio-file-input" accept=".mp3,.wav,.m4a,.flac,audio/mpeg,audio/wav,audio/mp4,audio/flac" class="hidden">
+          <input type="file" id="doc-file-input" accept=".pdf,.docx,.txt" class="hidden">
         </div>
       </div>
 
@@ -157,6 +156,43 @@
 
     <!-- 토스트 알림 -->
     <div id="toast" class="hidden"></div>
+
+    <!-- 문서 업데이트 다이얼로그 -->
+    <div id="doc-update-dialog" class="hidden">
+      <div id="doc-dialog-header">
+        <span>📄 문서 업데이트</span>
+        <button id="doc-cancel-btn" class="icon-btn" title="닫기">✕</button>
+      </div>
+      <div id="doc-dialog-body">
+        <p id="doc-update-filename"></p>
+        <p class="doc-dialog-label">업데이트 방식을 선택하세요</p>
+        <div class="doc-mode-btns">
+          <button id="doc-full-replace-btn" class="doc-mode-btn">
+            <span class="doc-mode-icon">🔄</span>
+            <div class="doc-mode-text">
+              <span class="doc-mode-title">전체 교체</span>
+              <span class="doc-mode-desc">새 문서 내용으로 전체 교체</span>
+            </div>
+          </button>
+          <button id="doc-partial-update-btn" class="doc-mode-btn">
+            <span class="doc-mode-icon">✏️</span>
+            <div class="doc-mode-text">
+              <span class="doc-mode-title">특정 부분 업데이트</span>
+              <span class="doc-mode-desc">지정한 부분만 수정</span>
+            </div>
+          </button>
+        </div>
+        <div id="doc-partial-instruction" class="hidden">
+          <label class="doc-instruction-label">어떤 부분을 업데이트할지 설명하세요</label>
+          <textarea id="doc-instruction-input" rows="4"
+            placeholder="예: 3장 내용을 새 문서 기준으로 업데이트해줘&#10;예: 결론 부분을 새 문서의 내용으로 교체해줘"></textarea>
+        </div>
+      </div>
+      <div id="doc-dialog-footer">
+        <button id="doc-confirm-btn" class="btn-primary hidden">확인</button>
+        <button id="doc-cancel-close-btn" class="btn-secondary">취소</button>
+      </div>
+    </div>
 
   </div><!-- /app -->
 

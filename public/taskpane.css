@@ -665,6 +665,117 @@ html, body {
 
 @keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(6px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 
+/* ========== Document Update Dialog ========== */
+#doc-update-dialog {
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  z-index: 150;
+}
+
+#doc-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--blue);
+  color: white;
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+#doc-dialog-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 14px;
+}
+
+#doc-update-filename {
+  font-size: 12px;
+  color: var(--text-light);
+  background: var(--bg);
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  margin-bottom: 14px;
+  word-break: break-all;
+}
+
+.doc-dialog-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+}
+
+.doc-mode-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.doc-mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.doc-mode-btn:hover { border-color: var(--blue); background: var(--blue-light); }
+.doc-mode-btn.selected { border-color: var(--blue); background: var(--blue-light); }
+
+.doc-mode-icon { font-size: 22px; flex-shrink: 0; }
+.doc-mode-text { display: flex; flex-direction: column; gap: 2px; }
+.doc-mode-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.doc-mode-desc  { font-size: 11px; color: var(--text-light); }
+
+.doc-instruction-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-light);
+  margin-bottom: 6px;
+}
+
+#doc-instruction-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  resize: vertical;
+  outline: none;
+  line-height: 1.45;
+  transition: border-color 0.15s;
+}
+#doc-instruction-input:focus {
+  border-color: var(--blue);
+  background: var(--surface);
+  box-shadow: 0 0 0 2px rgba(0,120,212,0.15);
+}
+
+#doc-dialog-footer {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
 /* ========== Scrollbar ========== */
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
