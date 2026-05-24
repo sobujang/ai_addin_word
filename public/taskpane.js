@@ -9,7 +9,10 @@ const STORAGE_KEY_TRACK = 'gemini_track_changes';
 /* ========== State ========== */
 let conversationHistory = []; // { role: 'user'|'model', parts: [{text}] }[]
 let currentPreviewText = '';
+let currentPreviewMode = 'insert'; // 'insert' | 'replace-body'
 let isProcessing = false;
+let pendingDocFile = null;
+let docUpdateMode = null; // 'full' | 'partial'
 
 /* ========== Office.js Init ========== */
 Office.onReady(function (info) {
@@ -90,6 +93,17 @@ function bindEvents() {
     document.getElementById('audio-file-input').click();
   });
   document.getElementById('audio-file-input').addEventListener('change', onAudioFileSelected);
+  document.getElementById('doc-upload-btn').addEventListener('click', () => {
+    document.getElementById('doc-file-input').click();
+  });
+  document.getElementById('doc-file-input').addEventListener('change', onDocumentFileSelected);
+
+  // Document update dialog
+  document.getElementById('doc-full-replace-btn').addEventListener('click', () => selectDocUpdateMode('full'));
+  document.getElementById('doc-partial-update-btn').addEventListener('click', () => selectDocUpdateMode('partial'));
+  document.getElementById('doc-confirm-btn').addEventListener('click', confirmDocUpdate);
+  document.getElementById('doc-cancel-btn').addEventListener('click', cancelDocUpdate);
+  document.getElementById('doc-cancel-close-btn').addEventListener('click', cancelDocUpdate);
 
   // Preview panel
   document.getElementById('close-preview-btn').addEventListener('click', closePreview);
@@ -273,11 +287,7 @@ function supportsWordApi(version) {
 
 async function insertTextToDocument(text) {
   try {
-    if (useTrackChanges()) {
-      await insertWithTrackChanges(text, false);
-    } else {
-      await insertToWordDocument(text);
-    }
+    await insertMarkdownAsWordFormatting(text, false, useTrackChanges());
     showToast('Word에 삽입되었습니다.', 'success');
   } catch (err) {
     showToast(`삽입 실패: ${err.message}`, 'error', 5000);
@@ -287,11 +297,7 @@ async function insertTextToDocument(text) {
 
 async function replaceSelectionInDocument(text) {
   try {
-    if (useTrackChanges()) {
-      await insertWithTrackChanges(text, true);
-    } else {
-      await replaceWordSelection(text);
-    }
+    await insertMarkdownAsWordFormatting(text, true, useTrackChanges());
     showToast('선택 텍스트가 교체되었습니다.', 'success');
   } catch (err) {
     showToast(`교체 실패: ${err.message}`, 'error', 5000);
@@ -324,34 +330,273 @@ async function replaceWordSelection(text) {
   }
 }
 
-function setSelectedData(text) {
-  return new Promise((resolve, reject) => {
-    Office.context.document.setSelectedDataAsync(
-      text,
-      { coercionType: Office.CoercionType.Text },
-      (result) => {
-        if (result.status === Office.AsyncResultStatus.Succeeded) resolve();
-        else reject(new Error(result.error.message));
+async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = false, trackChanges = false) {
+  const paragraphs = parseMarkdownToWordParagraphs(markdownText);
+  console.log('[Insert] 단락 파싱 완료:', paragraphs.length, '개', paragraphs.map(p => p.type));
+  if (paragraphs.length === 0) return;
+
+  await Word.run(async (context) => {
+
+    // 1. 트랙 변경 모드 (삽입 후 원래 상태로 복구하기 위해 먼저 읽기)
+    let originalTrackingMode = null;
+    if (trackChanges) {
+      try {
+        context.document.load('changeTrackingMode');
+        await context.sync();
+        originalTrackingMode = context.document.changeTrackingMode;
+        context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
+        await context.sync();
+        console.log('[Insert] 트랙 변경 모드 활성화 (원래 모드:', originalTrackingMode, ')');
+      } catch (e) {
+        console.error('[Insert] 트랙 변경 모드 오류:', e.message, e.code);
       }
-    );
+    }
+
+    // 2. 선택 영역 가져오기
+    let selection;
+    try {
+      selection = context.document.getSelection();
+      await context.sync();
+      console.log('[Insert] getSelection() 성공');
+    } catch (e) {
+      console.error('[Insert] getSelection() 오류:', e.message, e.code);
+      throw e;
+    }
+
+    // 3. 선택 영역 삭제 (교체 모드)
+    if (replaceSelection) {
+      try {
+        selection.delete();
+        await context.sync();
+        selection = context.document.getSelection();
+        await context.sync();
+        console.log('[Insert] 선택 영역 삭제 성공');
+      } catch (e) {
+        console.error('[Insert] selection.delete() 오류:', e.message, e.code);
+        throw e;
+      }
+    }
+
+    const styleMap = {
+      h1: 'Heading 1',
+      h2: 'Heading 2',
+      h3: 'Heading 3',
+      h4: 'Heading 4',
+      bullet: 'List Bullet',
+      number: 'List Number',
+      normal: 'Normal',
+      code: 'Normal',
+      blockquote: 'Normal',
+      empty: 'Normal',
+    };
+
+    let ref = selection;
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      const para = paragraphs[i];
+      console.log(`[Insert] 단락 ${i} 처리 중 (type: ${para.type})`);
+
+      // 4. 단락 삽입
+      let newPara;
+      try {
+        newPara = ref.insertParagraph('', Word.InsertLocation.after);
+        console.log(`[Insert] 단락 ${i} insertParagraph 성공`);
+      } catch (e) {
+        console.error(`[Insert] 단락 ${i} insertParagraph 오류:`, e.message, e.code);
+        throw e;
+      }
+
+      // 5. 스타일 적용
+      try {
+        newPara.style = styleMap[para.type] || 'Normal';
+        console.log(`[Insert] 단락 ${i} style='${newPara.style}' 설정`);
+      } catch (e) {
+        console.warn(`[Insert] 단락 ${i} style 오류 (Normal로 대체):`, e.message, e.code);
+        try { newPara.style = 'Normal'; } catch (_) {}
+      }
+
+      // 6. 내용 삽입
+      try {
+        if (para.type === 'hr') {
+          const hrRange = newPara.insertText('─'.repeat(40), Word.InsertLocation.end);
+          hrRange.font.color = '#AAAAAA';
+
+        } else if (para.type === 'code') {
+          newPara.font.name = 'Courier New';
+          newPara.font.size = 10;
+          for (const run of para.runs) {
+            if (run.text) newPara.insertText(run.text, Word.InsertLocation.end);
+          }
+
+        } else if (para.type === 'blockquote') {
+          try { newPara.leftIndent = 36; } catch (e) {
+            console.warn(`[Insert] leftIndent 오류:`, e.message, e.code);
+          }
+          for (const run of para.runs) {
+            if (!run.text) continue;
+            const r = newPara.insertText(run.text, Word.InsertLocation.end);
+            try { r.font.italic = true; } catch (_) {}
+            if (run.bold) { try { r.font.bold = true; } catch (_) {} }
+          }
+
+        } else if (para.type !== 'empty') {
+          for (const run of para.runs) {
+            if (!run.text) continue;
+            const r = newPara.insertText(run.text, Word.InsertLocation.end);
+            try {
+              if (run.bold) r.font.bold = true;
+              if (run.italic) r.font.italic = true;
+              if (run.code) {
+                r.font.name = 'Courier New';
+                r.font.size = 10;
+              }
+            } catch (e) {
+              console.warn(`[Insert] 단락 ${i} font 설정 오류:`, e.message, e.code, 'run:', run);
+            }
+          }
+        }
+        console.log(`[Insert] 단락 ${i} 내용 삽입 성공`);
+      } catch (e) {
+        console.error(`[Insert] 단락 ${i} 내용 삽입 오류:`, e.message, e.code, 'para:', para);
+        throw e;
+      }
+
+      ref = newPara;
+    }
+
+    // 7. 트랙 변경 모드 원래 상태로 복구
+    if (trackChanges && originalTrackingMode !== null) {
+      try {
+        context.document.changeTrackingMode = originalTrackingMode;
+        console.log('[Insert] 트랙 변경 모드 복구:', originalTrackingMode);
+      } catch (e) {
+        console.warn('[Insert] 트랙 변경 모드 복구 오류:', e.message);
+      }
+    }
+
+    // 8. 최종 sync
+    try {
+      await context.sync();
+      console.log('[Insert] 최종 context.sync() 성공');
+    } catch (e) {
+      console.error('[Insert] 최종 context.sync() 오류:', e.message, e.code, e.debugInfo);
+      throw e;
+    }
   });
 }
 
-async function insertWithTrackChanges(text, replaceSelection) {
-  if (!supportsWordApi('1.1')) {
-    await setSelectedData(text);
-    return;
-  }
-  await Word.run(async (context) => {
-    context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
-    await context.sync();
-    if (replaceSelection) {
-      context.document.getSelection().insertText(text, Word.InsertLocation.replace);
-    } else {
-      context.document.body.insertText(text, Word.InsertLocation.end);
+function parseMarkdownToWordParagraphs(text) {
+  const lines = text.split('\n');
+  const result = [];
+  let inCodeBlock = false;
+  let codeLines = [];
+
+  for (const line of lines) {
+    if (line.trim().startsWith('```')) {
+      if (inCodeBlock) {
+        for (const cl of codeLines) {
+          result.push({ type: 'code', runs: [{ text: cl, bold: false, italic: false, code: false }] });
+        }
+        codeLines = [];
+        inCodeBlock = false;
+      } else {
+        inCodeBlock = true;
+      }
+      continue;
     }
-    await context.sync();
-  });
+
+    if (inCodeBlock) { codeLines.push(line); continue; }
+
+    if (!line.trim()) {
+      if (result.length > 0 && result[result.length - 1].type !== 'empty') {
+        result.push({ type: 'empty', runs: [] });
+      }
+      continue;
+    }
+
+    if (/^(---+|===+|\*\*\*+)$/.test(line.trim())) {
+      result.push({ type: 'hr', runs: [] });
+      continue;
+    }
+
+    const h4 = line.match(/^#### (.+)$/);
+    if (h4) { result.push({ type: 'h4', runs: parseInlineMarkdown(h4[1]) }); continue; }
+
+    const h3 = line.match(/^### (.+)$/);
+    if (h3) { result.push({ type: 'h3', runs: parseInlineMarkdown(h3[1]) }); continue; }
+
+    const h2 = line.match(/^## (.+)$/);
+    if (h2) { result.push({ type: 'h2', runs: parseInlineMarkdown(h2[1]) }); continue; }
+
+    const h1 = line.match(/^# (.+)$/);
+    if (h1) { result.push({ type: 'h1', runs: parseInlineMarkdown(h1[1]) }); continue; }
+
+    const taskUnchecked = line.match(/^[-*+] \[ \] (.+)$/);
+    if (taskUnchecked) {
+      result.push({ type: 'bullet', runs: [{ text: '☐ ', bold: false, italic: false, code: false }, ...parseInlineMarkdown(taskUnchecked[1])] });
+      continue;
+    }
+
+    const taskChecked = line.match(/^[-*+] \[x\] (.+)$/i);
+    if (taskChecked) {
+      result.push({ type: 'bullet', runs: [{ text: '☑ ', bold: false, italic: false, code: false }, ...parseInlineMarkdown(taskChecked[1])] });
+      continue;
+    }
+
+    const bullet = line.match(/^[-*+] (.+)$/);
+    if (bullet) { result.push({ type: 'bullet', runs: parseInlineMarkdown(bullet[1]) }); continue; }
+
+    const ordered = line.match(/^\d+\. (.+)$/);
+    if (ordered) { result.push({ type: 'number', runs: parseInlineMarkdown(ordered[1]) }); continue; }
+
+    const blockquote = line.match(/^> (.+)$/);
+    if (blockquote) { result.push({ type: 'blockquote', runs: parseInlineMarkdown(blockquote[1]) }); continue; }
+
+    result.push({ type: 'normal', runs: parseInlineMarkdown(line) });
+  }
+
+  if (inCodeBlock) {
+    for (const cl of codeLines) {
+      result.push({ type: 'code', runs: [{ text: cl, bold: false, italic: false, code: false }] });
+    }
+  }
+
+  while (result.length > 0 && result[result.length - 1].type === 'empty') result.pop();
+
+  return result;
+}
+
+function parseInlineMarkdown(text) {
+  const runs = [];
+  let rem = text;
+
+  while (rem.length > 0) {
+    const bim = rem.match(/^\*\*\*(.+?)\*\*\*/);
+    if (bim) { runs.push({ text: bim[1], bold: true, italic: true, code: false }); rem = rem.slice(bim[0].length); continue; }
+
+    const bm = rem.match(/^\*\*(.+?)\*\*/);
+    if (bm) { runs.push({ text: bm[1], bold: true, italic: false, code: false }); rem = rem.slice(bm[0].length); continue; }
+
+    const im = rem.match(/^\*(.+?)\*/);
+    if (im) { runs.push({ text: im[1], bold: false, italic: true, code: false }); rem = rem.slice(im[0].length); continue; }
+
+    const cm = rem.match(/^`([^`]+)`/);
+    if (cm) { runs.push({ text: cm[1], bold: false, italic: false, code: true }); rem = rem.slice(cm[0].length); continue; }
+
+    const next = rem.search(/\*\*\*|\*\*|\*|`/);
+    if (next === -1) {
+      runs.push({ text: rem, bold: false, italic: false, code: false });
+      rem = '';
+    } else if (next > 0) {
+      runs.push({ text: rem.slice(0, next), bold: false, italic: false, code: false });
+      rem = rem.slice(next);
+    } else {
+      runs.push({ text: rem[0], bold: false, italic: false, code: false });
+      rem = rem.slice(1);
+    }
+  }
+
+  return runs.length > 0 ? runs : [{ text: text, bold: false, italic: false, code: false }];
 }
 
 // 삽입 에러의 debugInfo를 미리보기 패널에 표시
@@ -528,6 +773,188 @@ async function waitForFileActive(fileName, maxWaitMs = 120000) {
   }
 }
 
+/* ========== 문서 파일 업로드 → 업데이트 ========== */
+function onDocumentFileSelected(e) {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+
+  const supportedExt = ['pdf', 'docx', 'txt'];
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!supportedExt.includes(ext)) {
+    showToast('지원 형식: PDF, DOCX, TXT', 'warning');
+    return;
+  }
+  if (!getApiKey()) { openSettings(); showToast('API 키를 먼저 설정해주세요.', 'warning'); return; }
+
+  pendingDocFile = file;
+  docUpdateMode = null;
+  document.getElementById('doc-update-filename').textContent = `📎 ${file.name}`;
+  document.getElementById('doc-partial-instruction').classList.add('hidden');
+  document.getElementById('doc-confirm-btn').classList.add('hidden');
+  document.querySelectorAll('.doc-mode-btn').forEach(b => b.classList.remove('selected'));
+  document.getElementById('doc-update-dialog').classList.remove('hidden');
+}
+
+function selectDocUpdateMode(mode) {
+  docUpdateMode = mode;
+  document.querySelectorAll('.doc-mode-btn').forEach(b => b.classList.remove('selected'));
+  document.getElementById(mode === 'full' ? 'doc-full-replace-btn' : 'doc-partial-update-btn').classList.add('selected');
+  document.getElementById('doc-partial-instruction').classList.toggle('hidden', mode !== 'partial');
+  document.getElementById('doc-confirm-btn').classList.remove('hidden');
+}
+
+function cancelDocUpdate() {
+  pendingDocFile = null;
+  docUpdateMode = null;
+  document.getElementById('doc-update-dialog').classList.add('hidden');
+}
+
+async function confirmDocUpdate() {
+  if (!pendingDocFile || !docUpdateMode) return;
+  const instruction = docUpdateMode === 'partial'
+    ? document.getElementById('doc-instruction-input').value.trim()
+    : '';
+  if (docUpdateMode === 'partial' && !instruction) {
+    showToast('업데이트할 내용을 설명해주세요.', 'warning');
+    return;
+  }
+  document.getElementById('doc-update-dialog').classList.add('hidden');
+  const file = pendingDocFile;
+  const mode = docUpdateMode;
+  pendingDocFile = null;
+  docUpdateMode = null;
+  await processDocumentUpdate(file, mode, instruction);
+}
+
+async function processDocumentUpdate(file, mode, instruction) {
+  showLoadingOverlay('현재 문서 읽는 중...');
+  try {
+    const currentText = await getCurrentDocumentText();
+    if (!currentText.trim()) throw new Error('현재 문서가 비어 있습니다.');
+
+    updateLoadingText(`파일 업로드 중... (${(file.size / 1024 / 1024).toFixed(1)}MB)`);
+    const formData = new FormData();
+    formData.append('metadata', new Blob([JSON.stringify({ file: { displayName: file.name } })], { type: 'application/json' }));
+    formData.append('file', file);
+
+    const uploadResp = await fetch(
+      `${API_BASE}/upload/v1beta/files?key=${getApiKey()}`,
+      { method: 'POST', headers: { 'X-Goog-Upload-Protocol': 'multipart' }, body: formData }
+    );
+    if (!uploadResp.ok) {
+      const e = await uploadResp.json().catch(() => ({}));
+      throw new Error(e.error?.message || `업로드 실패 (${uploadResp.status})`);
+    }
+    const { file: uploaded } = await uploadResp.json();
+
+    updateLoadingText('파일 처리 대기 중...');
+    await waitForFileActive(uploaded.name);
+
+    updateLoadingText('AI 분석 중...');
+    const prompt = mode === 'full'
+      ? `새로 업로드된 문서의 내용으로 현재 문서를 완전히 교체해 주세요.\n결과를 마크다운 형식으로 작성해 주세요.\n\n[현재 문서]\n${currentText}`
+      : `다음 지시에 따라 현재 문서의 특정 부분을 업데이트해 주세요:\n"${instruction}"\n나머지 부분은 그대로 유지하고, 업데이트된 전체 문서를 마크다운 형식으로 작성해 주세요.\n\n[현재 문서]\n${currentText}`;
+
+    const analysisResp = await fetch(
+      `${API_BASE}/v1beta/models/${MODEL_ADVANCED}:generateContent?key=${getApiKey()}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [
+            { fileData: { mimeType: uploaded.mimeType, fileUri: uploaded.uri } },
+            { text: prompt }
+          ]}],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 8192 }
+        })
+      }
+    );
+    if (!analysisResp.ok) {
+      const e = await analysisResp.json().catch(() => ({}));
+      throw new Error(e.error?.message || `분석 실패 (${analysisResp.status})`);
+    }
+    const data = await analysisResp.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!content) throw new Error('AI 응답을 받지 못했습니다.');
+
+    hideLoadingOverlay();
+    const title = mode === 'full' ? '🔄 전체 교체 미리보기' : '✏️ 부분 업데이트 미리보기';
+    showPreview(content, title, 'replace-body');
+
+  } catch (err) {
+    hideLoadingOverlay();
+    showToast(`오류: ${err.message}`, 'error');
+  }
+}
+
+async function getCurrentDocumentText() {
+  return Word.run(async (context) => {
+    const body = context.document.body;
+    body.load('text');
+    await context.sync();
+    return body.text;
+  });
+}
+
+async function replaceDocumentBody(markdownText) {
+  const paragraphs = parseMarkdownToWordParagraphs(markdownText);
+  if (paragraphs.length === 0) return;
+
+  await Word.run(async (context) => {
+    context.document.body.clear();
+    await context.sync();
+
+    const styleMap = {
+      h1: 'Heading 1', h2: 'Heading 2', h3: 'Heading 3', h4: 'Heading 4',
+      bullet: 'List Bullet', number: 'List Number',
+      normal: 'Normal', code: 'Normal', blockquote: 'Normal', empty: 'Normal',
+    };
+
+    let ref = context.document.body;
+    let isFirst = true;
+
+    for (const para of paragraphs) {
+      const loc = isFirst ? Word.InsertLocation.start : Word.InsertLocation.after;
+      const newPara = ref.insertParagraph('', loc);
+
+      try { newPara.style = styleMap[para.type] || 'Normal'; } catch (_) {}
+
+      if (para.type === 'hr') {
+        const r = newPara.insertText('─'.repeat(40), Word.InsertLocation.end);
+        try { r.font.color = '#AAAAAA'; } catch (_) {}
+      } else if (para.type === 'code') {
+        try { newPara.font.name = 'Courier New'; newPara.font.size = 10; } catch (_) {}
+        for (const run of para.runs) {
+          if (run.text) newPara.insertText(run.text, Word.InsertLocation.end);
+        }
+      } else if (para.type === 'blockquote') {
+        try { newPara.leftIndent = 36; } catch (_) {}
+        for (const run of para.runs) {
+          if (!run.text) continue;
+          const r = newPara.insertText(run.text, Word.InsertLocation.end);
+          try { r.font.italic = true; if (run.bold) r.font.bold = true; } catch (_) {}
+        }
+      } else if (para.type !== 'empty') {
+        for (const run of para.runs) {
+          if (!run.text) continue;
+          const r = newPara.insertText(run.text, Word.InsertLocation.end);
+          try {
+            if (run.bold) r.font.bold = true;
+            if (run.italic) r.font.italic = true;
+            if (run.code) { r.font.name = 'Courier New'; r.font.size = 10; }
+          } catch (_) {}
+        }
+      }
+
+      ref = newPara;
+      isFirst = false;
+    }
+
+    await context.sync();
+  });
+}
+
 /* ========== Gemini API ========== */
 async function callGeminiAPI(messages, model = MODEL_CHAT, withSearch = false) {
   const key = getApiKey();
@@ -579,25 +1006,29 @@ async function callGeminiAPI(messages, model = MODEL_CHAT, withSearch = false) {
 }
 
 /* ========== Preview Panel ========== */
-function showPreview(text, title = '미리보기') {
+function showPreview(text, title = '미리보기', mode = 'insert') {
   currentPreviewText = text;
+  currentPreviewMode = mode;
   document.getElementById('preview-title').textContent = title;
   document.getElementById('preview-content').innerHTML = renderMarkdown(text);
+  const insertBtn = document.getElementById('insert-preview-btn');
+  insertBtn.textContent = mode === 'replace-body' ? '🔄 문서 전체 교체' : '📄 Word에 삽입';
   document.getElementById('preview-panel').classList.remove('hidden');
 }
 
 function closePreview() {
   document.getElementById('preview-panel').classList.add('hidden');
   currentPreviewText = '';
+  currentPreviewMode = 'insert';
 }
 
 async function insertPreviewToDocument() {
   if (!currentPreviewText) return;
   try {
-    if (useTrackChanges()) {
-      await insertWithTrackChanges(currentPreviewText, false);
+    if (currentPreviewMode === 'replace-body') {
+      await replaceDocumentBody(currentPreviewText);
     } else {
-      await insertToWordDocument(currentPreviewText);
+      await insertMarkdownAsWordFormatting(currentPreviewText, false, useTrackChanges());
     }
     showToast('Word에 삽입되었습니다.', 'success');
     closePreview();
