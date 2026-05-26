@@ -371,15 +371,13 @@ async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = f
       ref = context.document.getSelection().paragraphs.getFirst();
     }
 
-    // 3. 스타일 맵 (Word 언어 버전에 따라 다를 수 있음)
-    //    [수정] 'Heading 1' 등의 영문 스타일명이 한글 워드에서 InvalidArgument를 유발할 수 있음
-    //           → 일단 표준 스타일명을 사용하고, 필요한 경우 한글 명칭도 시도하거나 'Normal'로 폴백
-    const isKorean = Office.context.displayLanguage.startsWith('ko');
+    // 3. 스타일 맵 (styleBuiltIn 사용하여 언어 환경에 무관하게 적용)
+    const hasWordApi13 = supportsWordApi('1.3');
     const styleMap = {
-      h1: isKorean ? '제목 1' : 'Heading 1',
-      h2: isKorean ? '제목 2' : 'Heading 2',
-      h3: isKorean ? '제목 3' : 'Heading 3',
-      h4: isKorean ? '제목 4' : 'Heading 4',
+      h1: 'Heading1',
+      h2: 'Heading2',
+      h3: 'Heading3',
+      h4: 'Heading4',
       bullet: 'Normal',
       number: 'Normal',
       normal: 'Normal',
@@ -390,9 +388,6 @@ async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = f
 
     let listCounter = 0;
     let prevType = null;
-
-    // 첫 번째 단락 처리: 기존 ref(현재 단락)의 내용을 직접 채울지, 아니면 항상 'after'에 넣을지 결정
-    // [개선] 첫 단락이 비어있으면 그곳에 바로 쓰고, 아니면 'after'로 삽입
     let firstPara = true;
 
     for (let i = 0; i < paragraphs.length; i++) {
@@ -409,7 +404,6 @@ async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = f
 
       let targetPara;
       if (firstPara) {
-        // 첫 번째 단락은 현재 위치(ref)를 그대로 사용 (단, replaceSelection이거나 현재 단락이 비었을 때 유리)
         targetPara = ref;
         firstPara = false;
       } else {
@@ -421,13 +415,27 @@ async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = f
         }
       }
 
-      // 스타일 적용 (오류 방지를 위해 try-catch는 못하지만, 최대한 안전한 이름 사용)
+      // 스타일 적용 (WordApi 1.3 이상이면 styleBuiltIn 사용으로 로컬라이징 문제 방지)
       try {
         const styleName = styleMap[para.type] || 'Normal';
-        targetPara.style = styleName;
+        if (hasWordApi13) {
+          targetPara.styleBuiltIn = styleName;
+        } else {
+          // 1.3 미만이면 style 속성에 invariant name 시도
+          targetPara.style = styleName;
+        }
       } catch (e) {
-        console.warn(`[Insert] 단락 ${i} style 설정 실패:`, e.message);
-        targetPara.style = 'Normal';
+        console.warn(`[Insert] 단락 ${i} 스타일 설정 실패 (한글 명칭 시도):`, e.message);
+        try {
+          // 최후의 수단: 한글 워드 명칭 시도 (h1 -> 제목 1)
+          if (para.type === 'h1') targetPara.style = '제목 1';
+          else if (para.type === 'h2') targetPara.style = '제목 2';
+          else if (para.type === 'h3') targetPara.style = '제목 3';
+          else if (para.type === 'h4') targetPara.style = '제목 4';
+          else targetPara.style = 'Normal';
+        } catch (_) {
+          try { targetPara.style = 'Normal'; } catch (__) { }
+        }
       }
 
       // 6. 내용 삽입
