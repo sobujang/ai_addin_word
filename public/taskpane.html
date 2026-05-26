@@ -5,9 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gemini AI Assistant</title>
-  <!-- Office.js -->
   <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1.1/hosted/office.js"></script>
-  <!-- CSS -->
   <link rel="stylesheet" href="taskpane.css">
 </head>
 
@@ -15,98 +13,61 @@
   <!-- Header -->
   <header>
     <div class="logo-section">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M12 2L14.85 9.15L22 12L14.85 14.85L12 22L9.15 14.85L2 12L9.15 9.15L12 2Z" fill="url(#gemini_grad)"
-          stroke="none" />
-        <defs>
-          <linearGradient id="gemini_grad" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stop-color="#4285f4" />
-            <stop offset="0.5" stop-color="#9b72cb" />
-            <stop offset="1" stop-color="#d96570" />
-          </linearGradient>
-        </defs>
-      </svg>
+      <div class="gemini-icon">✦</div>
       <span class="logo-text">Gemini AI</span>
+      <select id="style-select" class="style-dropdown">
+        <option value="normal">일반 대화</option>
+        <option value="report">📄 보고서</option>
+        <option value="memo">🏛️ 공문서</option>
+        <option value="plan">📅 기획서</option>
+        <option value="meeting">🎙️ 회의록</option>
+      </select>
     </div>
     <div class="header-actions">
-      <button id="clear-chat-btn" class="header-btn" title="대화 초기화">
-        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
-          <path
-            d="M15 4V3H9v1H4v2h1v13c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V6h1V4h-5zm2 15H7V6h10v13zM9 8h2v9H9V8zm4 0h2v9h2v-9z" />
-        </svg>
-      </button>
-      <button id="settings-btn" class="header-btn" title="설정">
-        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
-          <path
-            d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.21.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
-        </svg>
-      </button>
+      <button id="clear-chat-btn" class="icon-btn" title="대화 초기화">🗑️</button>
+      <button id="settings-btn" class="icon-btn" title="설정">⚙️</button>
     </div>
   </header>
 
-  <!-- Template Selector -->
-  <div class="template-selector"
-    style="padding: 10px 20px; background: #fff; border-bottom: 1px solid var(--md-sys-color-surface-variant); display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none;">
-    <span
-      style="font-size: 11px; font-weight: 700; color: var(--md-sys-color-outline); align-self: center; white-space: nowrap; margin-right: 4px;">STYLE:</span>
-    <button class="template-chip active" data-template="normal">일반 대화</button>
-    <button class="template-chip" data-template="report">보고서</button>
-    <button class="template-chip" data-template="memo">공문서</button>
-    <button class="template-chip" data-template="plan">기획서</button>
-    <button class="template-chip" data-template="meeting">회의록</button>
-  </div>
-
-  <!-- Chat Messages -->
+  <!-- Chat Container -->
   <main id="chat-container">
     <div class="message assistant">
-      <div class="bubble">안녕하세요! 워드 작성을 도와드리는 Gemini AI입니다. 아래 버튼을 이용해 음성 파일을 요약하거나, 궁금한 점을 물어보세요.</div>
+      <div class="bubble">안녕하세요! 워드 작성을 도와드리는 Gemini AI입니다. 무엇을 도와드릴까요?</div>
     </div>
   </main>
 
-  <!-- Action Chips -->
-  <div class="action-chips">
-    <button id="summarize-book-btn" class="chip primary">
-      <span>📖 단행본 정리</span>
-    </button>
-    <button id="upload-doc-btn" class="chip">
-      <span>📄 문서 업로드 (PDF/Docx)</span>
-    </button>
-    <button id="upload-audio-btn" class="chip">
-      <span>🎙️ 음성 회의록</span>
-    </button>
-    <button id="fetch-selection-btn" class="chip">
-      <span>📄 선택 텍스트</span>
-    </button>
+  <!-- Quick Actions Bar (Floating) -->
+  <div class="quick-tools">
+    <button class="quick-btn" data-action="polish">✨ 교정</button>
+    <button class="quick-btn" data-action="shorten">📝 요약</button>
+    <button class="quick-btn" data-action="formal">🏛️ 격식</button>
+    <button class="quick-btn" data-action="scan">🎯 학습</button>
   </div>
 
-  <!-- Quick Actions Row -->
-  <div class="quick-actions-row">
-    <button class="quick-btn" data-action="polish" title="선택 영역 문체 교정">✨ 문체 교정</button>
-    <button class="quick-btn" data-action="shorten" title="선택 영역 핵심 요약">📝 요약</button>
-    <button class="quick-btn" data-action="formal" title="선택 영역 공문체 변환">🏛️ 공문체</button>
-    <button class="quick-btn" data-action="scan" title="선택 영역의 문체를 AI가 학습">🎯 스타일 학습</button>
-  </div>
+  <!-- Bottom Input Area -->
+  <div class="bottom-area">
+    <div class="input-wrapper">
+      <button id="attach-btn" class="plus-btn" title="추가 기능">+</button>
+      <div class="textarea-container">
+        <textarea id="user-input" placeholder="메시지를 입력하세요..." rows="1"></textarea>
+      </div>
+      <button id="send-btn" class="send-btn">➔</button>
+    </div>
 
-  <!-- Auto-Apply Toggle (New) -->
-  <div style="padding: 0 20px 8px; display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
-    <span style="font-size: 11px; font-weight: 700; color: var(--md-sys-color-primary);">본문 자동 반영 모드</span>
-    <label class="switch">
-      <input type="checkbox" id="auto-apply-toggle">
-      <span class="slider round"></span>
-    </label>
-  </div>
-
-  <!-- Input Area -->
-  <div class="input-section">
-    <div class="input-container">
-      <textarea id="user-input" placeholder="메시지를 입력하세요..." rows="1"></textarea>
-      <button id="send-btn" class="send-btn">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-          stroke-linecap="round" stroke-linejoin="round">
-          <line x1="22" y1="2" x2="11" y2="13" />
-          <polygon points="22 2 15 22 11 13 2 9 22 2" />
-        </svg>
-      </button>
+    <!-- Hidden Attach Menu -->
+    <div id="attach-menu" class="attach-menu">
+      <button id="summarize-book-btn" class="menu-item">📖 단행본 정리</button>
+      <button id="upload-doc-btn" class="menu-item">📄 파일 업로드 (PDF/Txt)</button>
+      <button id="upload-audio-btn" class="menu-item">🎙️ 음성 회의록</button>
+      <button id="fetch-selection-btn" class="menu-item">📄 선택 영역 가져오기</button>
+      <div class="menu-divider"></div>
+      <div class="menu-footer">
+        <span>본문 자동 반영</span>
+        <label class="switch">
+          <input type="checkbox" id="auto-apply-toggle">
+          <span class="slider round"></span>
+        </label>
+      </div>
     </div>
   </div>
 
@@ -114,98 +75,48 @@
   <input type="file" id="audio-file-input" style="display: none;" accept="audio/*">
   <input type="file" id="doc-file-input" style="display: none;" accept=".pdf,.txt">
 
-  <!-- Settings Modal -->
+  <!-- Overlays -->
   <div id="settings-overlay" class="overlay">
     <div class="modal">
-      <h3 style="margin-top: 0;">⚙️ 설정</h3>
-
-      <!-- API Key -->
-      <div style="margin-bottom: 16px;">
-        <label class="setting-label">Gemini API Key</label>
-        <input type="password" id="api-key-input" class="setting-input" placeholder="AI Studio 키 입력">
+      <h3>⚙️ 설정</h3>
+      <div class="field">
+        <label>Gemini API Key</label>
+        <input type="password" id="api-key-input">
       </div>
-
-      <!-- Model Selection -->
-      <div style="margin-bottom: 16px;">
-        <label class="setting-label">AI 모델 선택</label>
-        <select id="model-select" class="setting-input">
-          <optgroup label="Gemini 2.5 (최신 모델)">
-            <option value="gemini-2.5-flash">Gemini 2.5 Flash (권장 - 빠르고 효율적)</option>
-            <option value="gemini-2.5-pro">Gemini 2.5 Pro (권장 - 복잡한 분석 및 고품질)</option>
-          </optgroup>
-          <optgroup label="Gemini 2.0 / 1.5 (안정 버전)">
-            <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-            <option value="gemini-1.5-pro">Gemini 1.5 Pro (고성능 레거시)</option>
-            <option value="gemini-1.5-flash">Gemini 1.5 Flash (경량 모델)</option>
-          </optgroup>
+      <div class="field">
+        <label>AI 모델</label>
+        <select id="model-select">
+          <option value="gemini-2.5-flash">Gemini 2.5 Flash (권장)</option>
+          <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
         </select>
       </div>
-
-      <!-- Language Selection -->
-      <div style="margin-bottom: 16px;">
-        <label class="setting-label">응답 언어 설정</label>
-        <select id="lang-select" class="setting-input">
-          <option value="ko">한국어 (Default)</option>
-          <option value="en">English (영어)</option>
+      <div class="field">
+        <label>언어</label>
+        <select id="lang-select">
+          <option value="ko">한국어</option>
+          <option value="en">English</option>
         </select>
       </div>
-
-      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 24px;">
+      <div class="checkbox-field">
         <input type="checkbox" id="track-changes-toggle">
-        <label for="track-changes-toggle" style="font-size: 14px;">수정 추적(Track Changes) 활성화</label>
+        <label for="track-changes-toggle">수정 추적 활성화</label>
       </div>
-
-      <div style="display: flex; justify-content: flex-end; gap: 10px;">
-        <button id="cancel-settings-btn" class="chip" style="border: none;">취소</button>
-        <button id="save-settings-btn" class="chip primary">저장</button>
+      <div class="modal-btns">
+        <button id="cancel-settings-btn" class="txt-btn">취소</button>
+        <button id="save-settings-btn" class="pri-btn">저장</button>
       </div>
     </div>
   </div>
 
-  <!-- Loading Overlay -->
   <div id="loading-overlay" class="overlay">
-    <div style="text-align: center; color: white;">
-      <div class="spinner"
-        style="border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid white; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 16px;">
-      </div>
-      <p id="loading-text">처리 중입니다...</p>
+    <div class="loader-content">
+      <div class="spinner"></div>
+      <p id="loading-text">처리 중...</p>
     </div>
   </div>
 
-  <!-- Toast -->
   <div id="toast"></div>
 
-  <style>
-    .setting-label {
-      display: block;
-      font-size: 12px;
-      font-weight: 600;
-      margin-bottom: 6px;
-      color: var(--md-sys-color-outline);
-    }
-
-    .setting-input {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 10px;
-      border-radius: 8px;
-      border: 1px solid var(--md-sys-color-outline);
-      font-family: inherit;
-      margin-bottom: 4px;
-    }
-
-    @keyframes spin {
-      0% {
-        transform: rotate(0deg);
-      }
-
-      100% {
-        transform: rotate(360deg);
-      }
-    }
-  </style>
-
-  <!-- JavaScript -->
   <script src="taskpane.js"></script>
 </body>
 
