@@ -71,7 +71,7 @@ async function callGeminiAPI(contents, specializedModel = null) {
 
   const systemInstruction = {
     role: "user",
-    parts: [{ text: `Answer in ${lang}. ${templateGuide} ${styleGuide ? '문체 가이드: ' + styleGuide : ''} Maintain a professional tone. 마크다운 기호를 본문에 포함하지 말고 워드 서식에 맞게 결과만 출력해 주세요.` }]
+    parts: [{ text: `Answer in ${lang}. ${templateGuide} ${styleGuide ? '문체 가이드: ' + styleGuide : ''} Maintain a professional tone. 문서에 마크다운 기호(**, --- 등)를 직접 표기하지 말고 순수 텍스트와 보편적인 문서 구조만 출력해 주세요.` }]
   };
 
   const response = await fetch(`${API_BASE}/v1beta/models/${model}:generateContent?key=${apiKey}`, {
@@ -109,60 +109,39 @@ async function handleSendMessage() {
   }
 }
 
-/* ========== Actions ========== */
-async function handleQuickAction(action) {
-  if (isProcessing) return;
-  const text = await getSelection();
-  if (!text) return showToast("텍스트를 선택해 주세요.");
-
-  let prompt = "";
-  if (action === 'polish') prompt = `교조/비즈니스 문체로 교정해줘: \n${text}`;
-  else if (action === 'shorten') prompt = `간결하게 요약해줘: \n${text}`;
-  else if (action === 'formal') prompt = `격식 있는 말투로 바꿔줘: \n${text}`;
-  else if (action === 'scan') { styleGuide = text.substring(0, 500); return showToast("스타일 학습 완료"); }
-
-  showThinking(true);
-  try {
-    const res = await callGeminiAPI([{ role: 'user', parts: [{ text: prompt }] }]);
-    addMessage('assistant', res);
-    if (document.getElementById('auto-apply-toggle').checked) await replaceMarkdownInWord(res);
-  } catch (err) {
-    showToast("처리 중 오류 발생");
-  } finally { showThinking(false); }
-}
-
-/* ========== Word Interaction (Enhanced) ========== */
+/* ========== Word Interaction (Robust) ========== */
 async function getSelection() {
   return new Promise(r => Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, res => r(res.value)));
 }
 
 async function replaceMarkdownInWord(md) {
+  if (!md) return;
   return Word.run(async (ctx) => {
     const sel = ctx.document.getSelection();
     sel.clear();
-    const lines = md.split('\n');
+    const lines = md.split(/\r?\n/); // 줄바꿈 문자 호환성 처리
     let anchor = sel.paragraphs.getFirst();
 
     for (let i = 0; i < lines.length; i++) {
-      let line = lines[i].trim();
-      if (!line && i > 0) continue;
-      if (line === "---" || line === "***") continue; // 구분선 제외
+      let line = lines[i];
+      if (!line.trim() && i > 0) {
+        anchor = anchor.insertParagraph("", "After");
+        continue;
+      }
+      if (line.trim() === "---" || line.trim() === "***") continue;
 
       let para = (i === 0) ? anchor : anchor.insertParagraph("", "After");
       para.clear();
 
-      // 1. 단락 스타일 결정
-      let cleanText = line;
-      if (line.startsWith('# ')) { para.styleBuiltIn = "Heading1"; cleanText = line.substring(2); }
-      else if (line.startsWith('## ')) { para.styleBuiltIn = "Heading2"; cleanText = line.substring(3); }
-      else if (line.startsWith('### ')) { para.styleBuiltIn = "Heading3"; cleanText = line.substring(4); }
-      else if (line.startsWith('* ') || line.startsWith('- ')) {
-        para.styleBuiltIn = "ListBullet";
-        cleanText = line.substring(2);
-      }
+      let cleanText = line.trim();
+      // 스타일 판별
+      if (cleanText.startsWith('# ')) { para.styleBuiltIn = "Heading1"; cleanText = cleanText.substring(2); }
+      else if (cleanText.startsWith('## ')) { para.styleBuiltIn = "Heading2"; cleanText = cleanText.substring(3); }
+      else if (cleanText.startsWith('### ')) { para.styleBuiltIn = "Heading3"; cleanText = cleanText.substring(4); }
+      else if (cleanText.match(/^[\*\-\+] /)) { para.styleBuiltIn = "ListBullet"; cleanText = cleanText.replace(/^[\*\-\+] /, ""); }
+      else if (cleanText.match(/^\d+\. /)) { para.styleBuiltIn = "ListNumber"; cleanText = cleanText.replace(/^\d+\. /, ""); }
       else { para.styleBuiltIn = "Normal"; }
 
-      // 2. 인라인 마크다운 파싱 (굵게, 기울임 등)
       parseAndInsertInline(para, cleanText);
       anchor = para;
     }
@@ -170,36 +149,27 @@ async function replaceMarkdownInWord(md) {
     if (localStorage.getItem(STORAGE_KEYS.TRACK) === 'true') {
       ctx.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
     }
-
     await ctx.sync();
     showToast("반영 완료");
   });
 }
 
 function parseAndInsertInline(paragraph, text) {
-  // **, __ (굵게), *, _ (기울임), ` (코드) 등을 찾는 정규식
   const regex = /(\*\*|__)(.*?)\1|(\*|_)(.*?)\3|(`)(.*?)\5|([^*`_]+|[*`_])/g;
   let match;
   while ((match = regex.exec(text)) !== null) {
-    let content = "";
-    let isBold = false, isItalic = false;
-
-    if (match[1]) { content = match[2]; isBold = true; }
-    else if (match[3]) { content = match[4]; isItalic = true; }
-    else if (match[5]) { content = match[6]; }
-    else { content = match[7]; }
-
+    let content = match[2] || match[4] || match[6] || match[7];
     if (content) {
       const range = paragraph.insertText(content, "End");
-      if (isBold) range.font.bold = true;
-      if (isItalic) range.font.italic = true;
+      if (match[1]) range.font.bold = true;
+      if (match[3]) range.font.italic = true;
     }
   }
 }
 
 function insertMarkdownToWord(md) { replaceMarkdownInWord(md); }
 
-/* ========== UI Helpers & Remaining Logic ========== */
+/* ========== UI Helpers ========== */
 function addMessage(role, text) {
   const container = document.getElementById('chat-container');
   const wrapper = document.createElement('div');
@@ -212,11 +182,22 @@ function addMessage(role, text) {
   if (role === 'assistant') {
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
-    // 템플릿 리터럴 내 백틱(`) 이스케이프 처리
-    const safeText = text.replace(/`/g, "\\`").replace(/\$/g, "\\$");
-    actions.innerHTML = `<button class="action-mini-btn" onclick="insertMarkdownToWord(\`${safeText}\`)">📄 삽입</button>
-                         <button class="action-mini-btn" style="color:#1a73e8" onclick="replaceMarkdownInWord(\`${safeText}\`)">🪄 반영</button>
-                         <button class="action-mini-btn" onclick="navigator.clipboard.writeText(\`${safeText}\`); showToast('복사됨')">📋 복사</button>`;
+
+    // 버튼 이벤트 리스너를 직접 등록하여 데이터 짤림 방지
+    const btns = [
+      { label: '📄 삽입', click: () => insertMarkdownToWord(text), color: '' },
+      { label: '🪄 반영', click: () => replaceMarkdownInWord(text), color: '#1a73e8' },
+      { label: '📋 복사', click: () => { navigator.clipboard.writeText(text); showToast('복사됨'); }, color: '' }
+    ];
+
+    btns.forEach(b => {
+      const btn = document.createElement('button');
+      btn.className = 'action-mini-btn';
+      btn.textContent = b.label;
+      if (b.color) btn.style.color = b.color;
+      btn.onclick = b.click;
+      actions.appendChild(btn);
+    });
     wrapper.appendChild(actions);
   }
   container.appendChild(wrapper);
@@ -237,17 +218,29 @@ function showThinking(show) {
 
 function showToast(msg) {
   const t = document.getElementById('toast');
-  if (!t) return;
-  t.textContent = msg; t.className = 'show';
-  setTimeout(() => t.className = '', 2000);
+  if (t) { t.textContent = msg; t.className = 'show'; setTimeout(() => t.className = '', 2000); }
 }
 
 function setProcessing(loading, text = "처리 중...") {
   const overlay = document.getElementById('loading-overlay');
-  if (overlay) {
-    overlay.style.display = loading ? 'flex' : 'none';
-    document.getElementById('loading-text').textContent = text;
-  }
+  if (overlay) { overlay.style.display = loading ? 'flex' : 'none'; document.getElementById('loading-text').textContent = text; }
+}
+
+async function handleQuickAction(action) {
+  if (isProcessing) return;
+  const text = await getSelection();
+  if (!text) return showToast("텍스트를 선택해 주세요.");
+  let prompt = "";
+  if (action === 'polish') prompt = `교조/비즈니스 문체로 교정해줘: \n${text}`;
+  else if (action === 'shorten') prompt = `간결하게 요약해줘: \n${text}`;
+  else if (action === 'formal') prompt = `격식 있는 말투로 바꿔줘: \n${text}`;
+  else if (action === 'scan') { styleGuide = text.substring(0, 500); return showToast("스타일 학습 완료"); }
+  showThinking(true);
+  try {
+    const res = await callGeminiAPI([{ role: 'user', parts: [{ text: prompt }] }]);
+    addMessage('assistant', res);
+    if (document.getElementById('auto-apply-toggle').checked) await replaceMarkdownInWord(res);
+  } finally { showThinking(false); }
 }
 
 async function onFileSelected(e, type) {
@@ -256,28 +249,16 @@ async function onFileSelected(e, type) {
   e.target.value = '';
   const apiKey = localStorage.getItem(STORAGE_KEYS.API);
   if (!apiKey) return showToast("API 키 설정을 확인하세요.");
-
   setProcessing(true, `${file.name} 분석 중...`);
   try {
     const formData = new FormData();
     formData.append('metadata', new Blob([JSON.stringify({ file: { displayName: file.name } })], { type: 'application/json' }));
     formData.append('file', file);
-
-    const uploadResp = await fetch(`${API_BASE}/upload/v1beta/files?key=${apiKey}`, {
-      method: "POST", headers: { "X-Goog-Upload-Protocol": "multipart" }, body: formData
-    });
+    const uploadResp = await fetch(`${API_BASE}/upload/v1beta/files?key=${apiKey}`, { method: "POST", headers: { "X-Goog-Upload-Protocol": "multipart" }, body: formData });
     const { file: uploadedFile } = await uploadResp.json();
     await waitForFileActive(uploadedFile.name, apiKey);
-
     const prompt = type === 'audio' ? "세부 회의록을 작성해줘." : "문서 내용을 요약해줘.";
-    const response = await callGeminiAPI([{
-      role: 'user',
-      parts: [
-        { fileData: { mimeType: uploadedFile.mimeType, fileUri: uploadedFile.uri } },
-        { text: prompt }
-      ]
-    }]);
-
+    const response = await callGeminiAPI([{ role: 'user', parts: [{ fileData: { mimeType: uploadedFile.mimeType, fileUri: uploadedFile.uri } }, { text: prompt }] }]);
     addMessage('assistant', `✅ ${file.name} 처리 완료.`);
     await insertMarkdownToWord(response);
   } catch (err) { addMessage('assistant', `⚠️ 파일 처리 오류: ${err.message}`); }
@@ -305,16 +286,13 @@ async function handleSummarizeBook() {
   showThinking(true);
   try {
     const context = conversationHistory.map(m => `${m.role === 'user' ? '사용자' : 'AI'}: ${m.parts[0].text}`).join('\n\n');
-    const prompt = `이 대화 내용을 단행본 형식의 글로 정리해줘.\n\n${context}`;
-    const res = await callGeminiAPI([{ role: 'user', parts: [{ text: prompt }] }]);
+    const res = await callGeminiAPI([{ role: 'user', parts: [{ text: `이 대화 내용을 단행본 형식으로 정리해줘.\n\n${context}` }] }]);
     addMessage('assistant', "📖 단행본 정리가 완료되었습니다.");
     await insertMarkdownToWord(res);
   } catch (err) { showToast("정리 실패"); }
   finally { showThinking(false); }
 }
-function loadSettings() {
-  document.getElementById('api-key-input').value = localStorage.getItem(STORAGE_KEYS.API) || '';
-}
+function loadSettings() { document.getElementById('api-key-input').value = localStorage.getItem(STORAGE_KEYS.API) || ''; }
 function saveSettings() {
   localStorage.setItem(STORAGE_KEYS.API, document.getElementById('api-key-input').value.trim());
   localStorage.setItem(STORAGE_KEYS.MODEL, document.getElementById('model-select').value);
