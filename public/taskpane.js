@@ -125,6 +125,11 @@ async function handleSendMessage() {
     const responseText = await callGeminiAPI(conversationHistory);
     addMessage('assistant', responseText);
     conversationHistory.push({ role: 'model', parts: [{ text: responseText }] });
+
+    // 자동 반영 체크
+    if (document.getElementById('auto-apply-toggle').checked) {
+      await replaceMarkdownInWord(responseText);
+    }
   } catch (err) {
     addMessage('assistant', `⚠️ ${err.message}`);
   } finally {
@@ -158,6 +163,11 @@ async function handleQuickAction(action) {
     showThinking(true);
     const response = await callGeminiAPI([{ role: 'user', parts: [{ text: prompt }] }]);
     addMessage('assistant', response);
+
+    // 자동 반영 체크
+    if (document.getElementById('auto-apply-toggle').checked) {
+      await replaceMarkdownInWord(response);
+    }
   } catch (err) {
     showToast("텍스트 처리에 실패했습니다.");
   } finally {
