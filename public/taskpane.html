@@ -112,8 +112,15 @@
       <div style="margin-bottom: 16px;">
         <label class="setting-label">AI 모델 선택</label>
         <select id="model-select" class="setting-input">
-          <option value="gemini-2.5-flash">Gemini 2.5 Flash (고성능)</option>
-          <option value="gemini-2.5-lite">Gemini 2.5 Lite (고효율)</option>
+          <optgroup label="Gemini 2.5 (최신 모델)">
+            <option value="gemini-2.5-flash">Gemini 2.5 Flash (권장 - 빠르고 효율적)</option>
+            <option value="gemini-2.5-pro">Gemini 2.5 Pro (권장 - 복잡한 분석 및 고품질)</option>
+          </optgroup>
+          <optgroup label="Gemini 2.0 / 1.5 (안정 버전)">
+            <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+            <option value="gemini-1.5-pro">Gemini 1.5 Pro (고성능 레거시)</option>
+            <option value="gemini-1.5-flash">Gemini 1.5 Flash (경량 모델)</option>
+          </optgroup>
         </select>
       </div>
 
