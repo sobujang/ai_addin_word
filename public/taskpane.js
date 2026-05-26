@@ -17,6 +17,7 @@ const TEMPLATES = {
 let currentTemplate = 'normal';
 let conversationHistory = [];
 let isProcessing = false;
+let styleGuide = ""; // 스타일 미러링을 위한 가이드
 
 /* ========== Office Initialization ========== */
 Office.onReady((info) => {
@@ -53,7 +54,11 @@ function initEventListeners() {
     });
   });
 
-  // Input
+  // Quick Actions (New)
+  document.querySelectorAll('.quick-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => handleQuickAction(e.target.dataset.action));
+  });
+
   document.getElementById('user-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -63,7 +68,7 @@ function initEventListeners() {
   });
 }
 
-/* ========== API Handling (With Fallback) ========== */
+/* ========== API Handling ========== */
 async function callGeminiAPI(contents, specializedModel = null) {
   const apiKey = localStorage.getItem(STORAGE_KEY_API);
   if (!apiKey) throw new Error("API 키가 없습니다. 설정에서 입력해주세요.");
@@ -71,11 +76,10 @@ async function callGeminiAPI(contents, specializedModel = null) {
   let modelName = specializedModel || localStorage.getItem(STORAGE_KEY_MODEL) || 'gemini-2.5-flash';
   const displayLang = localStorage.getItem(STORAGE_KEY_LANG) === 'en' ? 'English' : 'Korean';
 
-  // System instruction for language and template
   const templateGuide = TEMPLATES[currentTemplate] || TEMPLATES.normal;
   const systemInstruction = {
     role: "user",
-    parts: [{ text: `Answer in ${displayLang}. ${templateGuide} Maintain a professional and helpful tone.` }]
+    parts: [{ text: `Answer in ${displayLang}. ${templateGuide} ${styleGuide ? '문체 가이드: ' + styleGuide : ''} Maintain a professional tone.` }]
   };
 
   const body = {
@@ -86,7 +90,6 @@ async function callGeminiAPI(contents, specializedModel = null) {
   try {
     return await executeFetch(modelName, apiKey, body);
   } catch (err) {
-    console.warn(`${modelName} 호출 실패, 2.5-flash로 폴백 시도...`, err.message);
     return await executeFetch('gemini-2.5-flash', apiKey, body);
   }
 }
@@ -97,91 +100,15 @@ async function executeFetch(model, key, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
-
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));
     throw new Error(errorBody.error?.message || `API 실패 (${response.status})`);
   }
-
   const data = await response.json();
   return data.candidates?.[0]?.content?.parts?.[0]?.text;
 }
 
-/* ========== File Upload & Processing ========== */
-async function onFileSelected(e, type) {
-  const file = e.target.files[0];
-  if (!file) return;
-  e.target.value = '';
-
-  const apiKey = localStorage.getItem(STORAGE_KEY_API);
-  if (!apiKey) { toggleModal('settings-overlay', true); return; }
-
-  setProcessing(true, `${file.name} 분석 중...`);
-  try {
-    // 1. Upload
-    const formData = new FormData();
-    formData.append('metadata', new Blob([JSON.stringify({ file: { displayName: file.name } })], { type: 'application/json' }));
-    formData.append('file', file);
-
-    const uploadResp = await fetch(`${API_BASE}/upload/v1beta/files?key=${apiKey}`, {
-      method: "POST",
-      headers: { "X-Goog-Upload-Protocol": "multipart" },
-      body: formData
-    });
-    const { file: uploadedFile } = await uploadResp.json();
-
-    // 2. Poll
-    await waitForFileActive(uploadedFile.name, apiKey);
-
-    // 3. Analyze based on type
-    let prompt = "";
-    if (type === 'audio') {
-      prompt = `
-        다음 음성 파일은 중요한 회의 녹음 파일입니다. 
-        전체 내용을 처음부터 끝까지 꼼꼼하게 듣고, 누락되는 내용 없이 상세한 회의록을 작성해 주세요.
-
-        작성 가이드:
-        1. 메타 데이터: 파악 가능한 일시와 참석자를 적어주세요.
-        2. 상세 논의 내용: 회의에서 오간 대화들을 주요 주제별(Section)로 나누어 아주 상세하게 요약해 주세요. 각 주제 내에서 누가 어떤 의견을 냈는지도 포함하면 좋습니다.
-        3. 결정 사항 및 액션 아이템: 확정된 결론과 향후 실행할 과제(담당자 포함)를 명확히 정리해 주세요.
-        
-        응답 형식:
-        # 🎙️ 상세 회의록
-        - 일시: 
-        - 참석자: 
-
-        ## 📝 주요 주제별 논의 내용
-        (주제 1: ...)
-        (주제 2: ...)
-
-        ## ✅ 결정 사항 및 향후 계획
-        - 결정된 내용 1...
-        
-        ## 🚀 액션 아이템
-        - [ ] 담당자: 할 일 (기한)
-      `;
-    } else {
-      prompt = "이 문서 내용을 꼼꼼히 읽고 전체 내용을 파악해 주세요. 그리고 현재 작성 중인 워드 문서의 문체와 일치하도록 내용을 논리적으로 다듬어서 삽입 가능한 형태로 정리해 주세요.";
-    }
-
-    const response = await callGeminiAPI([{
-      role: 'user',
-      parts: [
-        { fileData: { mimeType: uploadedFile.mimeType, fileUri: uploadedFile.uri } },
-        { text: prompt }
-      ]
-    }]);
-
-    addMessage('assistant', `${type === 'audio' ? '🎙️ 회의록' : '📄 문서 분석'}이 완료되었습니다.`);
-    await insertMarkdownToWord(response);
-  } catch (err) {
-    addMessage('assistant', `⚠️ 처리 오류: ${err.message}`);
-  } finally {
-    setProcessing(false);
-  }
-}
-
-/* ========== Features ========== */
+/* ========== Chat Core ========== */
 async function handleSendMessage() {
   if (isProcessing) return;
   const inputEl = document.getElementById('user-input');
@@ -193,7 +120,7 @@ async function handleSendMessage() {
   addMessage('user', text);
   conversationHistory.push({ role: 'user', parts: [{ text }] });
 
-  setProcessing(true);
+  showThinking(true);
   try {
     const responseText = await callGeminiAPI(conversationHistory);
     addMessage('assistant', responseText);
@@ -201,26 +128,98 @@ async function handleSendMessage() {
   } catch (err) {
     addMessage('assistant', `⚠️ ${err.message}`);
   } finally {
-    setProcessing(false);
+    showThinking(false);
   }
 }
 
-async function handleSummarizeBook() {
-  if (conversationHistory.length === 0) return;
-  setProcessing(true, "단행본 형식 정리 중...");
+/* ========== Quick Actions & Style Mirroring ========== */
+async function handleQuickAction(action) {
+  if (isProcessing) return;
+
+  // 선택 영역 텍스트 가져오기
   try {
-    const context = conversationHistory.map(m => `${m.role === 'user' ? '사용자' : 'AI'}: ${m.parts[0].text}`).join('\n\n');
-    const prompt = `다음 대화를 단행본 형식으로 정리해주세요. 챕터와 소제목을 나누고 문어체로 작성하세요.\n\n${context}`;
-    const result = await callGeminiAPI([{ role: 'user', parts: [{ text: prompt }] }]);
-    await insertMarkdownToWord(result);
+    const text = await getWordSelection();
+    if (!text) {
+      showToast("먼저 워드에서 텍스트를 선택해 주세요.");
+      return;
+    }
+
+    let prompt = "";
+    switch (action) {
+      case 'polish': prompt = `아래 텍스트의 맞춤법을 교정하고 비즈니스 업무에 적합한 세련된 문체로 다듬어줘: \n\n${text}`; break;
+      case 'shorten': prompt = `아래 내용을 핵심 위주로 세 줄 이내로 요약해줘: \n\n${text}`; break;
+      case 'formal': prompt = `아래 내용을 격식 있는 공문서체로 변환해줘: \n\n${text}`; break;
+      case 'scan':
+        styleGuide = text.substring(0, 500);
+        addMessage('assistant', "✨ 현재 선택된 영역의 문체를 AI가 학습했습니다. 앞으로의 답변은 이 스타일을 따릅니다.");
+        return;
+    }
+
+    showThinking(true);
+    const response = await callGeminiAPI([{ role: 'user', parts: [{ text: prompt }] }]);
+    addMessage('assistant', response);
   } catch (err) {
-    addMessage('assistant', `⚠️ 오류: ${err.message}`);
+    showToast("텍스트 처리에 실패했습니다.");
+  } finally {
+    showThinking(false);
+  }
+}
+
+async function getWordSelection() {
+  return new Promise((resolve) => {
+    Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, (result) => {
+      resolve(result.status === Office.AsyncResultStatus.Succeeded ? result.value : null);
+    });
+  });
+}
+
+/* ========== File Processing ========== */
+async function onFileSelected(e, type) {
+  const file = e.target.files[0];
+  if (!file) return;
+  e.target.value = '';
+
+  const apiKey = localStorage.getItem(STORAGE_KEY_API);
+  if (!apiKey) { toggleModal('settings-overlay', true); return; }
+
+  setProcessing(true, `${file.name} 업로드 중...`); // 파일은 여전히 오버레이 사용 (전체 주도권 필요)
+  try {
+    const supportedTypes = ['application/pdf', 'text/plain', 'audio/'];
+    if (!supportedTypes.some(t => file.type.startsWith(t)) && !file.name.endsWith('.pdf')) {
+      throw new Error("PDF 또는 텍스트 파일만 지원됩니다.");
+    }
+
+    const formData = new FormData();
+    formData.append('metadata', new Blob([JSON.stringify({ file: { displayName: file.name } })], { type: 'application/json' }));
+    formData.append('file', file);
+
+    const uploadResp = await fetch(`${API_BASE}/upload/v1beta/files?key=${apiKey}`, {
+      method: "POST",
+      headers: { "X-Goog-Upload-Protocol": "multipart" },
+      body: formData
+    });
+    const { file: uploadedFile } = await uploadResp.json();
+    await waitForFileActive(uploadedFile.name, apiKey);
+
+    const prompt = type === 'audio' ? "세부 회의록을 작성해줘." : "핵심 요약본을 만들어줘.";
+    const response = await callGeminiAPI([{
+      role: 'user',
+      parts: [
+        { fileData: { mimeType: uploadedFile.mimeType, fileUri: uploadedFile.uri } },
+        { text: prompt }
+      ]
+    }]);
+
+    addMessage('assistant', `✅ ${file.name} 분석 완료.`);
+    await insertMarkdownToWord(response);
+  } catch (err) {
+    addMessage('assistant', `⚠️ ${err.message}`);
   } finally {
     setProcessing(false);
   }
 }
 
-/* ========== Word & Utilities ========== */
+/* ========== Word Interaction ========== */
 async function insertMarkdownToWord(markdown) {
   return Word.run(async (context) => {
     const selection = context.document.getSelection();
@@ -231,28 +230,15 @@ async function insertMarkdownToWord(markdown) {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed && !isFirst) continue;
-
       let targetPara = isFirst ? anchorPara : anchorPara.insertParagraph("", "After");
-      targetPara.clear(); // 기존 내용 삭제
+      targetPara.clear();
 
-      // 1. 단락 스타일(제목 등) 결정
       let cleanLine = line;
-      if (trimmed.startsWith('# ')) {
-        targetPara.styleBuiltIn = "Heading1";
-        cleanLine = trimmed.replace('# ', '');
-      } else if (trimmed.startsWith('## ')) {
-        targetPara.styleBuiltIn = "Heading2";
-        cleanLine = trimmed.replace('## ', '');
-      } else if (trimmed.startsWith('### ')) {
-        targetPara.styleBuiltIn = "Heading3";
-        cleanLine = trimmed.replace('### ', '');
-      } else {
-        targetPara.styleBuiltIn = "Normal";
-      }
+      if (trimmed.startsWith('# ')) { targetPara.styleBuiltIn = "Heading1"; cleanLine = trimmed.replace('# ', ''); }
+      else if (trimmed.startsWith('## ')) { targetPara.styleBuiltIn = "Heading2"; cleanLine = trimmed.replace('## ', ''); }
+      else { targetPara.styleBuiltIn = "Normal"; }
 
-      // 2. 인라인 서식(Bold, Italic) 파싱 및 삽입
       parseAndInsertInline(targetPara, cleanLine);
-
       anchorPara = targetPara;
       isFirst = false;
     }
@@ -260,40 +246,74 @@ async function insertMarkdownToWord(markdown) {
   });
 }
 
-/**
- * 인라인 마크다운(**, *)을 파싱하여 워드 단락에 삽입합니다.
- */
 function parseAndInsertInline(paragraph, text) {
-  // 간단한 정규식 파서: **bold**, *italic* 등을 찾음
   const regex = /(\*\*|__)(.*?)\1|(\*|_)(.*?)\3|(`)(.*?)\5|([^*`_]+|[*`_])/g;
   let match;
-
   while ((match = regex.exec(text)) !== null) {
-    let content, isBold = false, isItalic = false, isCode = false;
-
-    if (match[1]) { // Bold (**text**)
-      content = match[2];
-      isBold = true;
-    } else if (match[3]) { // Italic (*text*)
-      content = match[4];
-      isItalic = true;
-    } else if (match[5]) { // Code (`text`)
-      content = match[6];
-      isCode = true;
-    } else { // Plain text
-      content = match[7];
-    }
+    let content, isBold = false, isItalic = false;
+    if (match[1]) { content = match[2]; isBold = true; }
+    else if (match[3]) { content = match[4]; isItalic = true; }
+    else { content = match[7]; }
 
     if (content) {
       const range = paragraph.insertText(content, "End");
       if (isBold) range.font.bold = true;
       if (isItalic) range.font.italic = true;
-      if (isCode) {
-        range.font.name = "Courier New";
-        range.font.size = 10;
-      }
     }
   }
+}
+
+/* ========== UI Helpers ========== */
+function addMessage(role, text) {
+  const container = document.getElementById('chat-container');
+  const wrapper = document.createElement('div');
+  wrapper.className = `message ${role}`;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.innerHTML = text.replace(/\n/g, '<br>');
+  wrapper.appendChild(bubble);
+
+  if (role === 'assistant') {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    const insBtn = document.createElement('button'); insBtn.className = 'action-mini-btn'; insBtn.innerHTML = '📄 삽입';
+    insBtn.onclick = () => insertMarkdownToWord(text);
+    const cpBtn = document.createElement('button'); cpBtn.className = 'action-mini-btn'; cpBtn.innerHTML = '📋 복사';
+    cpBtn.onclick = () => { navigator.clipboard.writeText(text); showToast("복사되었습니다."); };
+    actions.append(insBtn, cpBtn);
+    wrapper.appendChild(actions);
+  }
+  container.appendChild(wrapper);
+  container.scrollTop = container.scrollHeight;
+}
+
+function showThinking(show) {
+  isProcessing = show;
+  const container = document.getElementById('chat-container');
+  const existing = document.getElementById('ai-thinking');
+  if (show) {
+    if (existing) return;
+    const thinking = document.createElement('div');
+    thinking.id = 'ai-thinking';
+    thinking.className = 'thinking-bubble';
+    thinking.innerHTML = `<div class="typing-dots"><span></span><span></span><span></span></div><div class="thinking-text">Gemini가 생각 중...</div>`;
+    container.appendChild(thinking);
+    container.scrollTop = container.scrollHeight;
+  } else {
+    if (existing) existing.remove();
+  }
+}
+
+function setProcessing(loading, text = "처리 중...") {
+  document.getElementById('loading-overlay').style.display = loading ? 'flex' : 'none';
+  document.getElementById('loading-text').textContent = text;
+}
+
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.className = 'show';
+  setTimeout(() => { toast.className = ''; }, 3000);
 }
 
 function loadSettings() {
@@ -309,59 +329,19 @@ function saveSettings() {
   localStorage.setItem(STORAGE_KEY_LANG, document.getElementById('lang-select').value);
   localStorage.setItem(STORAGE_KEY_TRACK, document.getElementById('track-changes-toggle').checked);
   toggleModal('settings-overlay', false);
+  showToast("설정이 저장되었습니다.");
 }
 
-function addMessage(role, text) {
-  const container = document.getElementById('chat-container');
-  const wrapper = document.createElement('div');
-  wrapper.className = `message ${role}`;
-
-  const bubble = document.createElement('div');
-  bubble.className = 'bubble';
-  bubble.innerHTML = text.replace(/\n/g, '<br>');
-  wrapper.appendChild(bubble);
-
-  // AI 응답일 경우 액션 버튼 추가
-  if (role === 'assistant') {
-    const actions = document.createElement('div');
-    actions.className = 'msg-actions';
-
-    // 삽입 버튼
-    const insertBtn = document.createElement('button');
-    insertBtn.className = 'action-mini-btn';
-    insertBtn.innerHTML = '📄 삽입';
-    insertBtn.onclick = () => insertMarkdownToWord(text);
-
-    // 복사 버튼
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'action-mini-btn';
-    copyBtn.innerHTML = '📋 복사';
-    copyBtn.onclick = () => {
-      navigator.clipboard.writeText(text);
-      showToast("클립보드에 복사되었습니다.");
-    };
-
-    actions.append(insertBtn, copyBtn);
-    wrapper.appendChild(actions);
-  }
-
-  container.appendChild(wrapper);
-  container.scrollTop = container.scrollHeight;
-}
-
-function showToast(msg) {
-  const toast = document.getElementById('toast');
-  toast.textContent = msg;
-  toast.className = 'show';
-  setTimeout(() => {
-    toast.className = '';
-  }, 3000);
-}
-
-function setProcessing(loading, text = "처리 중...") {
-  isProcessing = loading;
-  document.getElementById('loading-overlay').style.display = loading ? 'flex' : 'none';
-  document.getElementById('loading-text').textContent = text;
+async function handleSummarizeBook() {
+  if (conversationHistory.length === 0) return;
+  showThinking(true);
+  try {
+    const context = conversationHistory.map(m => `${m.role === 'user' ? '사용자' : 'AI'}: ${m.parts[0].text}`).join('\n\n');
+    const prompt = `대화 내용을 단행본 형식으로 정리해줘.\n\n${context}`;
+    const result = await callGeminiAPI([{ role: 'user', parts: [{ text: prompt }] }]);
+    await insertMarkdownToWord(result);
+  } catch (err) { addMessage('assistant', `⚠️ ${err.message}`); }
+  finally { showThinking(false); }
 }
 
 async function waitForFileActive(fileName, apiKey) {
@@ -376,11 +356,10 @@ async function waitForFileActive(fileName, apiKey) {
 function toggleModal(id, show) { document.getElementById(id).style.display = show ? 'flex' : 'none'; }
 function autoResizeTextarea(el) { el.style.height = 'auto'; el.style.height = (el.scrollHeight) + 'px'; }
 async function handleFetchSelection() {
-  Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, (result) => {
-    if (result.status === Office.AsyncResultStatus.Succeeded && result.value) {
-      document.getElementById('user-input').value += `\n[선택한 내용]: ${result.value}\n`;
-      autoResizeTextarea(document.getElementById('user-input'));
-    }
-  });
+  const text = await getWordSelection();
+  if (text) {
+    document.getElementById('user-input').value += `\n[선택한 내용]: ${text}\n`;
+    autoResizeTextarea(document.getElementById('user-input'));
+  }
 }
-function clearChat() { if (confirm("삭제하시겠습니까?")) { conversationHistory = []; document.getElementById('chat-container').innerHTML = ''; } }
+function clearChat() { if (confirm("삭제하시겠습니까?")) { conversationHistory = []; document.getElementById('chat-container').innerHTML = ''; styleGuide = ""; } }

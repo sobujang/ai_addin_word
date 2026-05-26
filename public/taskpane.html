@@ -79,6 +79,14 @@
     </button>
   </div>
 
+  <!-- Quick Actions Row (New) -->
+  <div class="quick-actions-row">
+    <button class="quick-btn" data-action="polish" title="선택 영역 문체 교정">✨ 문체 교정</button>
+    <button class="quick-btn" data-action="shorten" title="선택 영역 핵심 요약">📝 요약</button>
+    <button class="quick-btn" data-action="formal" title="선택 영역 공문체 변환">🏛️ 공문체</button>
+    <button class="quick-btn" data-action="scan" title="선택 영역의 문체를 AI가 학습">🎯 스타일 학습</button>
+  </div>
+
   <!-- Input Area -->
   <div class="input-section">
     <div class="input-container">
@@ -95,7 +103,7 @@
 
   <!-- Hidden Inputs -->
   <input type="file" id="audio-file-input" style="display: none;" accept="audio/*">
-  <input type="file" id="doc-file-input" style="display: none;" accept=".pdf,.doc,.docx,.txt">
+  <input type="file" id="doc-file-input" style="display: none;" accept=".pdf,.txt">
 
   <!-- Settings Modal -->
   <div id="settings-overlay" class="overlay">
