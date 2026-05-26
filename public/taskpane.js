@@ -1,5 +1,6 @@
 /* ========== Constants & Config ========== */
 const API_BASE = 'https://generativelanguage.googleapis.com';
+const MODEL_CHAT = 'gemini-2.5-flash';
 const STORAGE_KEY_API = 'gemini_api_key_v2';
 const STORAGE_KEY_MODEL = 'gemini_model_v2';
 const STORAGE_KEY_LANG = 'gemini_lang_v2';
@@ -67,7 +68,7 @@ async function callGeminiAPI(contents, specializedModel = null) {
   const apiKey = localStorage.getItem(STORAGE_KEY_API);
   if (!apiKey) throw new Error("API 키가 없습니다. 설정에서 입력해주세요.");
 
-  let modelName = specializedModel || localStorage.getItem(STORAGE_KEY_MODEL) || 'gemini-2.0-flash';
+  let modelName = specializedModel || localStorage.getItem(STORAGE_KEY_MODEL) || 'gemini-2.5-flash';
   const displayLang = localStorage.getItem(STORAGE_KEY_LANG) === 'en' ? 'English' : 'Korean';
 
   // System instruction for language and template
@@ -85,8 +86,8 @@ async function callGeminiAPI(contents, specializedModel = null) {
   try {
     return await executeFetch(modelName, apiKey, body);
   } catch (err) {
-    console.warn(`${modelName} 호출 실패, 2.0-flash로 폴백 시도...`, err.message);
-    return await executeFetch('gemini-2.0-flash', apiKey, body);
+    console.warn(`${modelName} 호출 실패, 2.5-flash로 폴백 시도...`, err.message);
+    return await executeFetch('gemini-2.5-flash', apiKey, body);
   }
 }
 
@@ -243,11 +244,49 @@ function saveSettings() {
 
 function addMessage(role, text) {
   const container = document.getElementById('chat-container');
-  const div = document.createElement('div');
-  div.className = `message ${role}`;
-  div.innerHTML = `<div class="bubble">${text.replace(/\n/g, '<br>')}</div>`;
-  container.appendChild(div);
+  const wrapper = document.createElement('div');
+  wrapper.className = `message ${role}`;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.innerHTML = text.replace(/\n/g, '<br>');
+  wrapper.appendChild(bubble);
+
+  // AI 응답일 경우 액션 버튼 추가
+  if (role === 'assistant') {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+
+    // 삽입 버튼
+    const insertBtn = document.createElement('button');
+    insertBtn.className = 'action-mini-btn';
+    insertBtn.innerHTML = '📄 삽입';
+    insertBtn.onclick = () => insertMarkdownToWord(text);
+
+    // 복사 버튼
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'action-mini-btn';
+    copyBtn.innerHTML = '📋 복사';
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(text);
+      showToast("클립보드에 복사되었습니다.");
+    };
+
+    actions.append(insertBtn, copyBtn);
+    wrapper.appendChild(actions);
+  }
+
+  container.appendChild(wrapper);
   container.scrollTop = container.scrollHeight;
+}
+
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.className = 'show';
+  setTimeout(() => {
+    toast.className = '';
+  }, 3000);
 }
 
 function setProcessing(loading, text = "처리 중...") {
