@@ -1,48 +1,60 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0" xmlns:ov="http://schemas.microsoft.com/office/officeappversionoverrides" xsi:type="TaskPaneApp">
-  <Id>b7a321c4-9e8d-4f1a-b32c-56789abcde01</Id>
+<OfficeApp
+  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+  xsi:type="TaskPaneApp">
+
+  <Id>a7f3c2e1-9b4d-4e8f-b6a2-3c5d7e9f1a0b</Id>
   <Version>1.0.0.0</Version>
   <ProviderName>Gemini AI</ProviderName>
   <DefaultLocale>ko-KR</DefaultLocale>
   <DisplayName DefaultValue="Gemini AI Assistant"/>
-  <Description DefaultValue="Google Gemini AI를 활용한 워드 작업 보조 도구"/>
-  <IconUrl DefaultValue="https://sobujang.github.io/ai_addin_word/assets/icon-32.png"/>
-  <HighResolutionIconUrl DefaultValue="https://sobujang.github.io/ai_addin_word/assets/icon-64.png"/>
-  <SupportUrl DefaultValue="https://github.com/sobujang/ai_addin_word"/>
+  <Description DefaultValue="Google Gemini AI를 활용한 Word 문서 작성 도우미"/>
+
+  <IconUrl DefaultValue="https://sobujang.github.io/ai_addin_word/assets/icon-80.png"/>
+  <HighResolutionIconUrl DefaultValue="https://sobujang.github.io/ai_addin_word/assets/icon-80.png"/>
+  <SupportUrl DefaultValue="https://aistudio.google.com"/>
+
   <AppDomains>
-    <AppDomain>https://generativelanguage.googleapis.com</AppDomain>
+    <AppDomain>https://sobujang.github.io</AppDomain>
   </AppDomains>
+
   <Hosts>
     <Host Name="Document"/>
   </Hosts>
+
   <DefaultSettings>
     <SourceLocation DefaultValue="https://sobujang.github.io/ai_addin_word/taskpane.html"/>
   </DefaultSettings>
+
   <Permissions>ReadWriteDocument</Permissions>
+
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
     <Hosts>
-      <Host xsi:type="Workbook">
+      <Host xsi:type="Document">
         <DesktopFormFactor>
           <GetStarted>
-            <Title DefaultValue="Gemini AI Assistant"/>
-            <Description DefaultValue="Gemini AI를 사용하여 문서를 요약하고 다듬으세요."/>
-            <LearnMoreUrl DefaultValue="https://github.com/sobujang/ai_addin_word"/>
+            <Title resid="GetStarted.Title"/>
+            <Description resid="GetStarted.Description"/>
+            <LearnMoreUrl resid="GetStarted.LearnMoreUrl"/>
           </GetStarted>
-          <FunctionFile resid="Taskpane.Url"/>
+          <FunctionFile resid="Commands.Url"/>
           <ExtensionPoint xsi:type="PrimaryCommandSurface">
             <OfficeTab id="TabHome">
-              <Group id="GeminiGroup">
-                <Label DefaultValue="Gemini AI"/>
+              <Group id="CommandsGroup">
+                <Label resid="CommandsGroup.Label"/>
                 <Icon>
                   <bt:Image size="16" resid="Icon.16x16"/>
                   <bt:Image size="32" resid="Icon.32x32"/>
                   <bt:Image size="80" resid="Icon.80x80"/>
                 </Icon>
                 <Control xsi:type="Button" id="TaskpaneButton">
-                  <Label DefaultValue="Gemini Assistant"/>
+                  <Label resid="TaskpaneButton.Label"/>
                   <Supertip>
-                    <Title DefaultValue="Gemini Assistant"/>
-                    <Description DefaultValue="Gemini AI 대화창을 엽니다."/>
+                    <Title resid="TaskpaneButton.Label"/>
+                    <Description resid="TaskpaneButton.Tooltip"/>
                   </Supertip>
                   <Icon>
                     <bt:Image size="16" resid="Icon.16x16"/>
@@ -50,34 +62,7 @@
                     <bt:Image size="80" resid="Icon.80x80"/>
                   </Icon>
                   <Action xsi:type="ShowTaskpane">
-                    <TaskpaneId>GeminiTaskPane</TaskpaneId>
-                    <SourceLocation resid="Taskpane.Url"/>
-                  </Action>
-                </Control>
-              </Group>
-            </OfficeTab>
-          </ExtensionPoint>
-        </DesktopFormFactor>
-      </Host>
-      <Host xsi:type="Document">
-        <DesktopFormFactor>
-          <ExtensionPoint xsi:type="PrimaryCommandSurface">
-            <OfficeTab id="TabHome">
-              <Group id="GeminiGroupDoc">
-                <Label DefaultValue="Gemini AI"/>
-                <Control xsi:type="Button" id="TaskpaneButtonDoc">
-                  <Label DefaultValue="Gemini Assistant"/>
-                  <Supertip>
-                    <Title DefaultValue="Gemini Assistant"/>
-                    <Description DefaultValue="Gemini AI 대화창을 엽니다."/>
-                  </Supertip>
-                  <Icon>
-                    <bt:Image size="16" resid="Icon.16x16"/>
-                    <bt:Image size="32" resid="Icon.32x32"/>
-                    <bt:Image size="80" resid="Icon.80x80"/>
-                  </Icon>
-                  <Action xsi:type="ShowTaskpane">
-                    <TaskpaneId>GeminiTaskPaneDoc</TaskpaneId>
+                    <TaskpaneId>ButtonId1</TaskpaneId>
                     <SourceLocation resid="Taskpane.Url"/>
                   </Action>
                 </Control>
@@ -94,8 +79,19 @@
         <bt:Image id="Icon.80x80" DefaultValue="https://sobujang.github.io/ai_addin_word/assets/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
+        <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://aistudio.google.com"/>
+        <bt:Url id="Commands.Url" DefaultValue="https://sobujang.github.io/ai_addin_word/taskpane.html"/>
         <bt:Url id="Taskpane.Url" DefaultValue="https://sobujang.github.io/ai_addin_word/taskpane.html"/>
       </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="GetStarted.Title" DefaultValue="Gemini AI를 시작합니다"/>
+        <bt:String id="CommandsGroup.Label" DefaultValue="Gemini AI"/>
+        <bt:String id="TaskpaneButton.Label" DefaultValue="Gemini AI 열기"/>
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="GetStarted.Description" DefaultValue="Google Gemini AI로 문서를 더 스마트하게 작성하세요."/>
+        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Gemini AI 패널을 열어 AI와 대화하고 문서를 편집하세요."/>
+      </bt:LongStrings>
     </Resources>
-  </Permissions>
+  </VersionOverrides>
 </OfficeApp>
