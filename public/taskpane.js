@@ -109,9 +109,29 @@ async function handleSendMessage() {
   }
 }
 
-/* ========== Word Interaction (Robust) ========== */
+/* ========== Word Interaction (Improved Context) ========== */
 async function getSelection() {
-  return new Promise(r => Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, res => r(res.value)));
+  return Word.run(async (context) => {
+    const selection = context.document.getSelection();
+    selection.load("text, isEmpty");
+    await context.sync();
+
+    if (!selection.isEmpty) {
+      return selection.text;
+    } else {
+      // 선택 영역이 없을 경우 커서가 있는 단락 전체를 가져옵니다.
+      const paragraphs = selection.getParagraphs();
+      paragraphs.load("items");
+      await context.sync();
+
+      if (paragraphs.items.length > 0) {
+        paragraphs.items[0].load("text");
+        await context.sync();
+        return paragraphs.items[0].text;
+      }
+    }
+    return null;
+  });
 }
 
 async function replaceMarkdownInWord(md) {
