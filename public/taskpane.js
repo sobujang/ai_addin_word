@@ -337,7 +337,7 @@ async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = f
 
   await Word.run(async (context) => {
 
-    // 1. 트랙 변경 모드 (삽입 후 원래 상태로 복구하기 위해 먼저 읽기)
+    // 1. 트랙 변경 모드 (삽입 후 원래 상태로 복구)
     let originalTrackingMode = null;
     if (trackChanges) {
       try {
@@ -352,86 +352,113 @@ async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = f
       }
     }
 
-    // 2. 선택 영역 가져오기
-    let selection;
-    try {
-      selection = context.document.getSelection();
-      await context.sync();
-      console.log('[Insert] getSelection() 성공');
-    } catch (e) {
-      console.error('[Insert] getSelection() 오류:', e.message, e.code);
-      throw e;
-    }
+    // 2. 삽입 기준점 결정
+    //    [수정] Range(collapsed) 대신 Paragraph를 anchor로 사용
+    //    → Word Online에서 Range.insertParagraph('', after)는 InvalidArgument 유발
+    let ref; // Paragraph object — insertParagraph의 안정적 anchor
 
-    // 3. 선택 영역 삭제 (교체 모드)
     if (replaceSelection) {
-      try {
-        selection.delete();
-        await context.sync();
-        selection = context.document.getSelection();
-        await context.sync();
-        console.log('[Insert] 선택 영역 삭제 성공');
-      } catch (e) {
-        console.error('[Insert] selection.delete() 오류:', e.message, e.code);
-        throw e;
-      }
+      // [수정] selection.delete() 대신 insertText('', replace) 사용
+      //        → 삭제 후 cursor가 더 명확한 Paragraph 위치에 남음
+      const sel = context.document.getSelection();
+      sel.insertText('', Word.InsertLocation.replace);
+      await context.sync();
+      console.log('[Insert] 선택 영역 교체(삭제) 성공');
+      // 삭제 후 커서가 위치한 단락을 Paragraph로 가져옴
+      ref = context.document.getSelection().paragraphs.getFirst();
+    } else {
+      // 비교체 모드: 커서가 있는 단락을 Paragraph로 가져옴
+      ref = context.document.getSelection().paragraphs.getFirst();
     }
 
+    // 3. 스타일 맵
+    //    [수정] 'List Bullet' / 'List Number' 제거
+    //           → 해당 스타일이 문서에 없으면 sync 시점에 InvalidArgument 발생
+    //           → 'Normal' + 수동 프리픽스(•, 1.) 방식으로 대체
     const styleMap = {
       h1: 'Heading 1',
       h2: 'Heading 2',
       h3: 'Heading 3',
       h4: 'Heading 4',
-      bullet: 'List Bullet',
-      number: 'List Number',
-      normal: 'Normal',
-      code: 'Normal',
+      bullet:     'Normal',  // 'List Bullet' 제거
+      number:     'Normal',  // 'List Number' 제거
+      normal:     'Normal',
+      code:       'Normal',
       blockquote: 'Normal',
-      empty: 'Normal',
+      empty:      'Normal',
     };
 
-    let ref = selection;
+    let listCounter = 0; // 번호 목록 카운터
+    let prevType = null;
 
     for (let i = 0; i < paragraphs.length; i++) {
       const para = paragraphs[i];
       console.log(`[Insert] 단락 ${i} 처리 중 (type: ${para.type})`);
 
+      // 번호 목록 카운터 관리 (연속된 number 타입 추적)
+      if (para.type === 'number') {
+        if (prevType !== 'number') listCounter = 0;
+        listCounter++;
+      } else {
+        listCounter = 0;
+      }
+      prevType = para.type;
+
       // 4. 단락 삽입
+      //    [수정] ref가 Paragraph이므로 Paragraph.insertParagraph 호출
+      //           → Range.insertParagraph보다 Word Online에서 안정적
       let newPara;
       try {
         newPara = ref.insertParagraph('', Word.InsertLocation.after);
         console.log(`[Insert] 단락 ${i} insertParagraph 성공`);
       } catch (e) {
-        console.error(`[Insert] 단락 ${i} insertParagraph 오류:`, e.message, e.code);
+        console.error(`[Insert] 단락 ${i} insertParagraph 오류:`, e.message, e.code, e.debugInfo);
         throw e;
       }
 
-      // 5. 스타일 적용
-      try {
-        newPara.style = styleMap[para.type] || 'Normal';
-        console.log(`[Insert] 단락 ${i} style='${newPara.style}' 설정`);
-      } catch (e) {
-        console.warn(`[Insert] 단락 ${i} style 오류 (Normal로 대체):`, e.message, e.code);
-        try { newPara.style = 'Normal'; } catch (_) {}
-      }
+      // 5. 스타일 적용 (Heading 1~4, Normal만 사용 — 안전한 built-in 스타일)
+      newPara.style = styleMap[para.type] || 'Normal';
 
       // 6. 내용 삽입
       try {
         if (para.type === 'hr') {
           const hrRange = newPara.insertText('─'.repeat(40), Word.InsertLocation.end);
-          hrRange.font.color = '#AAAAAA';
+          try { hrRange.font.color = '#AAAAAA'; } catch (_) {}
+
+        } else if (para.type === 'bullet') {
+          // [수정] 'List Bullet' 스타일 대신 수동 불릿 프리픽스 삽입
+          newPara.insertText('• ', Word.InsertLocation.end);
+          for (const run of para.runs) {
+            if (!run.text) continue;
+            const r = newPara.insertText(run.text, Word.InsertLocation.end);
+            try {
+              if (run.bold)  r.font.bold = true;
+              if (run.italic) r.font.italic = true;
+              if (run.code) { r.font.name = 'Courier New'; r.font.size = 10; }
+            } catch (_) {}
+          }
+
+        } else if (para.type === 'number') {
+          // [수정] 'List Number' 스타일 대신 수동 번호 프리픽스 삽입
+          newPara.insertText(`${listCounter}. `, Word.InsertLocation.end);
+          for (const run of para.runs) {
+            if (!run.text) continue;
+            const r = newPara.insertText(run.text, Word.InsertLocation.end);
+            try {
+              if (run.bold)  r.font.bold = true;
+              if (run.italic) r.font.italic = true;
+              if (run.code) { r.font.name = 'Courier New'; r.font.size = 10; }
+            } catch (_) {}
+          }
 
         } else if (para.type === 'code') {
-          newPara.font.name = 'Courier New';
-          newPara.font.size = 10;
+          try { newPara.font.name = 'Courier New'; newPara.font.size = 10; } catch (_) {}
           for (const run of para.runs) {
             if (run.text) newPara.insertText(run.text, Word.InsertLocation.end);
           }
 
         } else if (para.type === 'blockquote') {
-          try { newPara.leftIndent = 36; } catch (e) {
-            console.warn(`[Insert] leftIndent 오류:`, e.message, e.code);
-          }
+          try { newPara.leftIndent = 36; } catch (_) {}
           for (const run of para.runs) {
             if (!run.text) continue;
             const r = newPara.insertText(run.text, Word.InsertLocation.end);
@@ -444,14 +471,11 @@ async function insertMarkdownAsWordFormatting(markdownText, replaceSelection = f
             if (!run.text) continue;
             const r = newPara.insertText(run.text, Word.InsertLocation.end);
             try {
-              if (run.bold) r.font.bold = true;
+              if (run.bold)  r.font.bold = true;
               if (run.italic) r.font.italic = true;
-              if (run.code) {
-                r.font.name = 'Courier New';
-                r.font.size = 10;
-              }
+              if (run.code) { r.font.name = 'Courier New'; r.font.size = 10; }
             } catch (e) {
-              console.warn(`[Insert] 단락 ${i} font 설정 오류:`, e.message, e.code, 'run:', run);
+              console.warn(`[Insert] 단락 ${i} font 설정 오류:`, e.message, 'run:', run);
             }
           }
         }
@@ -905,29 +929,68 @@ async function replaceDocumentBody(markdownText) {
     context.document.body.clear();
     await context.sync();
 
+    // [수정] 'List Bullet' / 'List Number' 제거 → Word Online InvalidArgument 방지
     const styleMap = {
       h1: 'Heading 1', h2: 'Heading 2', h3: 'Heading 3', h4: 'Heading 4',
-      bullet: 'List Bullet', number: 'List Number',
+      bullet: 'Normal', number: 'Normal',
       normal: 'Normal', code: 'Normal', blockquote: 'Normal', empty: 'Normal',
     };
 
     let ref = context.document.body;
     let isFirst = true;
+    let listCounter = 0;
+    let prevType = null;
 
     for (const para of paragraphs) {
+      // 번호 목록 카운터 관리
+      if (para.type === 'number') {
+        if (prevType !== 'number') listCounter = 0;
+        listCounter++;
+      } else {
+        listCounter = 0;
+      }
+      prevType = para.type;
+
       const loc = isFirst ? Word.InsertLocation.start : Word.InsertLocation.after;
       const newPara = ref.insertParagraph('', loc);
-
-      try { newPara.style = styleMap[para.type] || 'Normal'; } catch (_) {}
+      newPara.style = styleMap[para.type] || 'Normal';
 
       if (para.type === 'hr') {
         const r = newPara.insertText('─'.repeat(40), Word.InsertLocation.end);
         try { r.font.color = '#AAAAAA'; } catch (_) {}
+
+      } else if (para.type === 'bullet') {
+        // [수정] 수동 불릿 프리픽스
+        newPara.insertText('• ', Word.InsertLocation.end);
+        for (const run of para.runs) {
+          if (!run.text) continue;
+          const r = newPara.insertText(run.text, Word.InsertLocation.end);
+          try {
+            if (run.bold) r.font.bold = true;
+            if (run.italic) r.font.italic = true;
+            if (run.code) { r.font.name = 'Courier New'; r.font.size = 10; }
+          } catch (_) {}
+        }
+
+      } else if (para.type === 'number') {
+        // [수정] 수동 번호 프리픽스
+        newPara.insertText(`${listCounter}. `, Word.InsertLocation.end);
+        for (const run of para.runs) {
+          if (!run.text) continue;
+          const r = newPara.insertText(run.text, Word.InsertLocation.end);
+          try {
+            if (run.bold) r.font.bold = true;
+            if (run.italic) r.font.italic = true;
+            if (run.code) { r.font.name = 'Courier New'; r.font.size = 10; }
+          } catch (_) {}
+        }
+
       } else if (para.type === 'code') {
         try { newPara.font.name = 'Courier New'; newPara.font.size = 10; } catch (_) {}
         for (const run of para.runs) {
           if (run.text) newPara.insertText(run.text, Word.InsertLocation.end);
         }
+
       } else if (para.type === 'blockquote') {
         try { newPara.leftIndent = 36; } catch (_) {}
         for (const run of para.runs) {
@@ -935,6 +998,7 @@ async function replaceDocumentBody(markdownText) {
           const r = newPara.insertText(run.text, Word.InsertLocation.end);
           try { r.font.italic = true; if (run.bold) r.font.bold = true; } catch (_) {}
         }
+
       } else if (para.type !== 'empty') {
         for (const run of para.runs) {
           if (!run.text) continue;
