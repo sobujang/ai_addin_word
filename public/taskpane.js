@@ -219,7 +219,48 @@ async function onFileSelected(e, type) {
   }
 }
 
-/* ========== Word Interaction ========== */
+/* ========== Word Interaction (Enhanced) ========== */
+
+/**
+ * 현재 선택된 영역을 마크다운 서식을 적용하여 즉시 '교환'합니다.
+ */
+async function replaceMarkdownInWord(markdown) {
+  return Word.run(async (context) => {
+    const selection = context.document.getSelection();
+    // 선택 영역을 일단 비웁니다.
+    selection.clear();
+
+    const lines = markdown.split('\n');
+    let anchorPara = selection.paragraphs.getFirst();
+    let isFirst = true;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed && !isFirst) continue;
+
+      let targetPara = isFirst ? anchorPara : anchorPara.insertParagraph("", "After");
+      targetPara.clear();
+
+      let cleanLine = line;
+      if (trimmed.startsWith('# ')) { targetPara.styleBuiltIn = "Heading1"; cleanLine = trimmed.replace('# ', ''); }
+      else if (trimmed.startsWith('## ')) { targetPara.styleBuiltIn = "Heading2"; cleanLine = trimmed.replace('## ', ''); }
+      else { targetPara.styleBuiltIn = "Normal"; }
+
+      parseAndInsertInline(targetPara, cleanLine);
+      anchorPara = targetPara;
+      isFirst = false;
+    }
+
+    // 수정 추적(Track Changes)이 켜져 있다면 이를 시각적으로 확실하게 보여줍니다.
+    if (localStorage.getItem(STORAGE_KEY_TRACK) === 'true') {
+      context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
+    }
+
+    await context.sync();
+    showToast("본문에 즉시 반영되었습니다.");
+  });
+}
+
 async function insertMarkdownToWord(markdown) {
   return Word.run(async (context) => {
     const selection = context.document.getSelection();
@@ -276,11 +317,27 @@ function addMessage(role, text) {
   if (role === 'assistant') {
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
-    const insBtn = document.createElement('button'); insBtn.className = 'action-mini-btn'; insBtn.innerHTML = '📄 삽입';
+
+    // 삽입 버튼
+    const insBtn = document.createElement('button');
+    insBtn.className = 'action-mini-btn';
+    insBtn.innerHTML = '📄 삽입';
     insBtn.onclick = () => insertMarkdownToWord(text);
-    const cpBtn = document.createElement('button'); cpBtn.className = 'action-mini-btn'; cpBtn.innerHTML = '📋 복사';
+
+    // 반영 버튼 (New: 직접 수정)
+    const replBtn = document.createElement('button');
+    replBtn.className = 'action-mini-btn primary';
+    replBtn.innerHTML = '🪄 반영';
+    replBtn.title = "현재 워드에서 선택한 영역을 이 내용으로 교체합니다.";
+    replBtn.onclick = () => replaceMarkdownInWord(text);
+
+    // 복사 버튼
+    const cpBtn = document.createElement('button');
+    cpBtn.className = 'action-mini-btn';
+    cpBtn.innerHTML = '📋 복사';
     cpBtn.onclick = () => { navigator.clipboard.writeText(text); showToast("복사되었습니다."); };
-    actions.append(insBtn, cpBtn);
+
+    actions.append(insBtn, replBtn, cpBtn);
     wrapper.appendChild(actions);
   }
   container.appendChild(wrapper);
