@@ -71,7 +71,7 @@ async function callGeminiAPI(contents, specializedModel = null) {
 
   const systemInstruction = {
     role: "user",
-    parts: [{ text: `Answer in ${lang}. ${templateGuide} ${styleGuide ? '문체 가이드: ' + styleGuide : ''} Maintain a professional tone.` }]
+    parts: [{ text: `Answer in ${lang}. ${templateGuide} ${styleGuide ? '문체 가이드: ' + styleGuide : ''} Maintain a professional tone. 마크다운 기호를 본문에 포함하지 말고 워드 서식에 맞게 결과만 출력해 주세요.` }]
   };
 
   const response = await fetch(`${API_BASE}/v1beta/models/${model}:generateContent?key=${apiKey}`, {
@@ -131,20 +131,125 @@ async function handleQuickAction(action) {
   } finally { showThinking(false); }
 }
 
-async function handleSummarizeBook() {
-  if (conversationHistory.length === 0) return showToast("대화 내용이 없습니다.");
-  showThinking(true);
-  try {
-    const context = conversationHistory.map(m => `${m.role === 'user' ? '사용자' : 'AI'}: ${m.parts[0].text}`).join('\n\n');
-    const prompt = `이 대화 내용을 단행본 형식의 글로 정리해줘.\n\n${context}`;
-    const res = await callGeminiAPI([{ role: 'user', parts: [{ text: prompt }] }]);
-    addMessage('assistant', "📖 단행본 정리가 완료되었습니다.");
-    await insertMarkdownToWord(res);
-  } catch (err) { showToast("정리 실패"); }
-  finally { showThinking(false); }
+/* ========== Word Interaction (Enhanced) ========== */
+async function getSelection() {
+  return new Promise(r => Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, res => r(res.value)));
 }
 
-/* ========== File Processing ========== */
+async function replaceMarkdownInWord(md) {
+  return Word.run(async (ctx) => {
+    const sel = ctx.document.getSelection();
+    sel.clear();
+    const lines = md.split('\n');
+    let anchor = sel.paragraphs.getFirst();
+
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i].trim();
+      if (!line && i > 0) continue;
+      if (line === "---" || line === "***") continue; // 구분선 제외
+
+      let para = (i === 0) ? anchor : anchor.insertParagraph("", "After");
+      para.clear();
+
+      // 1. 단락 스타일 결정
+      let cleanText = line;
+      if (line.startsWith('# ')) { para.styleBuiltIn = "Heading1"; cleanText = line.substring(2); }
+      else if (line.startsWith('## ')) { para.styleBuiltIn = "Heading2"; cleanText = line.substring(3); }
+      else if (line.startsWith('### ')) { para.styleBuiltIn = "Heading3"; cleanText = line.substring(4); }
+      else if (line.startsWith('* ') || line.startsWith('- ')) {
+        para.styleBuiltIn = "ListBullet";
+        cleanText = line.substring(2);
+      }
+      else { para.styleBuiltIn = "Normal"; }
+
+      // 2. 인라인 마크다운 파싱 (굵게, 기울임 등)
+      parseAndInsertInline(para, cleanText);
+      anchor = para;
+    }
+
+    if (localStorage.getItem(STORAGE_KEYS.TRACK) === 'true') {
+      ctx.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
+    }
+
+    await ctx.sync();
+    showToast("반영 완료");
+  });
+}
+
+function parseAndInsertInline(paragraph, text) {
+  // **, __ (굵게), *, _ (기울임), ` (코드) 등을 찾는 정규식
+  const regex = /(\*\*|__)(.*?)\1|(\*|_)(.*?)\3|(`)(.*?)\5|([^*`_]+|[*`_])/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    let content = "";
+    let isBold = false, isItalic = false;
+
+    if (match[1]) { content = match[2]; isBold = true; }
+    else if (match[3]) { content = match[4]; isItalic = true; }
+    else if (match[5]) { content = match[6]; }
+    else { content = match[7]; }
+
+    if (content) {
+      const range = paragraph.insertText(content, "End");
+      if (isBold) range.font.bold = true;
+      if (isItalic) range.font.italic = true;
+    }
+  }
+}
+
+function insertMarkdownToWord(md) { replaceMarkdownInWord(md); }
+
+/* ========== UI Helpers & Remaining Logic ========== */
+function addMessage(role, text) {
+  const container = document.getElementById('chat-container');
+  const wrapper = document.createElement('div');
+  wrapper.className = `message ${role}`;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.innerHTML = text.replace(/\n/g, '<br>');
+  wrapper.appendChild(bubble);
+
+  if (role === 'assistant') {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    // 템플릿 리터럴 내 백틱(`) 이스케이프 처리
+    const safeText = text.replace(/`/g, "\\`").replace(/\$/g, "\\$");
+    actions.innerHTML = `<button class="action-mini-btn" onclick="insertMarkdownToWord(\`${safeText}\`)">📄 삽입</button>
+                         <button class="action-mini-btn" style="color:#1a73e8" onclick="replaceMarkdownInWord(\`${safeText}\`)">🪄 반영</button>
+                         <button class="action-mini-btn" onclick="navigator.clipboard.writeText(\`${safeText}\`); showToast('복사됨')">📋 복사</button>`;
+    wrapper.appendChild(actions);
+  }
+  container.appendChild(wrapper);
+  container.scrollTop = container.scrollHeight;
+}
+
+function showThinking(show) {
+  isProcessing = show;
+  const existing = document.getElementById('ai-thinking');
+  if (show && !existing) {
+    const div = document.createElement('div');
+    div.id = 'ai-thinking'; div.className = 'thinking-bubble';
+    div.innerHTML = `<div class="typing-dots"><span></span><span></span><span></span></div> Thinking...`;
+    document.getElementById('chat-container').appendChild(div);
+    document.getElementById('chat-container').scrollTop = document.getElementById('chat-container').scrollHeight;
+  } else if (!show && existing) existing.remove();
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.textContent = msg; t.className = 'show';
+  setTimeout(() => t.className = '', 2000);
+}
+
+function setProcessing(loading, text = "처리 중...") {
+  const overlay = document.getElementById('loading-overlay');
+  if (overlay) {
+    overlay.style.display = loading ? 'flex' : 'none';
+    document.getElementById('loading-text').textContent = text;
+  }
+}
+
 async function onFileSelected(e, type) {
   const file = e.target.files[0];
   if (!file) return;
@@ -179,82 +284,6 @@ async function onFileSelected(e, type) {
   finally { setProcessing(false); }
 }
 
-/* ========== Word Interaction ========== */
-async function getSelection() {
-  return new Promise(r => Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, res => r(res.value)));
-}
-
-async function replaceMarkdownInWord(md) {
-  return Word.run(async (ctx) => {
-    const sel = ctx.document.getSelection();
-    sel.clear();
-    const lines = md.split('\n');
-    let anchor = sel.paragraphs.getFirst();
-    for (const [idx, line] of lines.entries()) {
-      if (!line.trim() && idx > 0) continue;
-      let para = idx === 0 ? anchor : anchor.insertParagraph("", "After");
-      para.clear();
-      if (line.startsWith('# ')) { para.styleBuiltIn = "Heading1"; para.insertText(line.substring(2), "Replace"); }
-      else if (line.startsWith('## ')) { para.styleBuiltIn = "Heading2"; para.insertText(line.substring(3), "Replace"); }
-      else { para.insertText(line, "Replace"); }
-      anchor = para;
-    }
-    await ctx.sync();
-    showToast("반영 완료");
-  });
-}
-
-function insertMarkdownToWord(md) { replaceMarkdownInWord(md); }
-
-/* ========== UI Helpers ========== */
-function addMessage(role, text) {
-  const container = document.getElementById('chat-container');
-  const wrapper = document.createElement('div');
-  wrapper.className = `message ${role}`;
-  const bubble = document.createElement('div');
-  bubble.className = 'bubble';
-  bubble.innerHTML = text.replace(/\n/g, '<br>');
-  wrapper.appendChild(bubble);
-
-  if (role === 'assistant') {
-    const actions = document.createElement('div');
-    actions.className = 'msg-actions';
-    actions.innerHTML = `<button class="action-mini-btn" onclick="insertMarkdownToWord(\`${text}\`)">📄 삽입</button>
-                         <button class="action-mini-btn" style="color:#1a73e8" onclick="replaceMarkdownInWord(\`${text}\`)">🪄 반영</button>
-                         <button class="action-mini-btn" onclick="navigator.clipboard.writeText(\`${text}\`); showToast('복사됨')">📋 복사</button>`;
-    wrapper.appendChild(actions);
-  }
-  container.appendChild(wrapper);
-  container.scrollTop = container.scrollHeight;
-}
-
-function showThinking(show) {
-  isProcessing = show;
-  const existing = document.getElementById('ai-thinking');
-  if (show && !existing) {
-    const div = document.createElement('div');
-    div.id = 'ai-thinking'; div.className = 'thinking-bubble';
-    div.innerHTML = `<div class="typing-dots"><span></span><span></span><span></span></div> Reasoning...`;
-    document.getElementById('chat-container').appendChild(div);
-    document.getElementById('chat-container').scrollTop = document.getElementById('chat-container').scrollHeight;
-  } else if (!show && existing) existing.remove();
-}
-
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  if (!t) return;
-  t.textContent = msg; t.className = 'show';
-  setTimeout(() => t.className = '', 2000);
-}
-
-function setProcessing(loading, text = "처리 중...") {
-  const overlay = document.getElementById('loading-overlay');
-  if (overlay) {
-    overlay.style.display = loading ? 'flex' : 'none';
-    document.getElementById('loading-text').textContent = text;
-  }
-}
-
 async function waitForFileActive(fileName, apiKey) {
   while (true) {
     const resp = await fetch(`${API_BASE}/v1beta/${fileName}?key=${apiKey}`);
@@ -270,6 +299,18 @@ function clearChat() { if (confirm("대화 삭제?")) { conversationHistory = []
 async function handleFetchSelection() {
   const t = await getSelection();
   if (t) { document.getElementById('user-input').value += ` [선택: ${t}] `; autoResizeTextarea(document.getElementById('user-input')); }
+}
+async function handleSummarizeBook() {
+  if (conversationHistory.length === 0) return showToast("대화 내용이 없습니다.");
+  showThinking(true);
+  try {
+    const context = conversationHistory.map(m => `${m.role === 'user' ? '사용자' : 'AI'}: ${m.parts[0].text}`).join('\n\n');
+    const prompt = `이 대화 내용을 단행본 형식의 글로 정리해줘.\n\n${context}`;
+    const res = await callGeminiAPI([{ role: 'user', parts: [{ text: prompt }] }]);
+    addMessage('assistant', "📖 단행본 정리가 완료되었습니다.");
+    await insertMarkdownToWord(res);
+  } catch (err) { showToast("정리 실패"); }
+  finally { showThinking(false); }
 }
 function loadSettings() {
   document.getElementById('api-key-input').value = localStorage.getItem(STORAGE_KEYS.API) || '';
