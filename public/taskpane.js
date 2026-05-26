@@ -208,23 +208,69 @@ async function insertMarkdownToWord(markdown) {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed && !isFirst) continue;
-      let targetPara = isFirst ? anchorPara : anchorPara.insertParagraph("", "After");
 
+      let targetPara = isFirst ? anchorPara : anchorPara.insertParagraph("", "After");
+      targetPara.clear(); // 기존 내용 삭제
+
+      // 1. 단락 스타일(제목 등) 결정
+      let cleanLine = line;
       if (trimmed.startsWith('# ')) {
         targetPara.styleBuiltIn = "Heading1";
-        targetPara.insertText(trimmed.replace('# ', ''), "Replace");
+        cleanLine = trimmed.replace('# ', '');
       } else if (trimmed.startsWith('## ')) {
         targetPara.styleBuiltIn = "Heading2";
-        targetPara.insertText(trimmed.replace('## ', ''), "Replace");
+        cleanLine = trimmed.replace('## ', '');
+      } else if (trimmed.startsWith('### ')) {
+        targetPara.styleBuiltIn = "Heading3";
+        cleanLine = trimmed.replace('### ', '');
       } else {
         targetPara.styleBuiltIn = "Normal";
-        targetPara.insertText(line, "Replace");
       }
+
+      // 2. 인라인 서식(Bold, Italic) 파싱 및 삽입
+      parseAndInsertInline(targetPara, cleanLine);
+
       anchorPara = targetPara;
       isFirst = false;
     }
     await context.sync();
   });
+}
+
+/**
+ * 인라인 마크다운(**, *)을 파싱하여 워드 단락에 삽입합니다.
+ */
+function parseAndInsertInline(paragraph, text) {
+  // 간단한 정규식 파서: **bold**, *italic* 등을 찾음
+  const regex = /(\*\*|__)(.*?)\1|(\*|_)(.*?)\3|(`)(.*?)\5|([^*`_]+|[*`_])/g;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    let content, isBold = false, isItalic = false, isCode = false;
+
+    if (match[1]) { // Bold (**text**)
+      content = match[2];
+      isBold = true;
+    } else if (match[3]) { // Italic (*text*)
+      content = match[4];
+      isItalic = true;
+    } else if (match[5]) { // Code (`text`)
+      content = match[6];
+      isCode = true;
+    } else { // Plain text
+      content = match[7];
+    }
+
+    if (content) {
+      const range = paragraph.insertText(content, "End");
+      if (isBold) range.font.bold = true;
+      if (isItalic) range.font.italic = true;
+      if (isCode) {
+        range.font.name = "Courier New";
+        range.font.size = 10;
+      }
+    }
+  }
 }
 
 function loadSettings() {
