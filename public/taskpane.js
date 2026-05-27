@@ -220,7 +220,9 @@ function markdownToHtml(md) {
 
   if (inUl) html += "</ul>";
   if (inOl) html += "</ol>";
-  return html;
+
+  // 기본 폰트 설정 (영문: Calibri, 한글: 맑은 고딕)
+  return '<div style="font-family: Calibri, \'맑은 고딕\', \'Malgun Gothic\', sans-serif; font-size: 11pt;">' + html + '</div>';
 }
 
 /**
