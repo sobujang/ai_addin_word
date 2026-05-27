@@ -316,20 +316,44 @@ async function onFileSelected(e, type) {
   e.target.value = '';
   const apiKey = localStorage.getItem(STORAGE_KEYS.API);
   if (!apiKey) return showToast("API 키 설정을 확인하세요.");
+
   setProcessing(true, `${file.name} 분석 중...`);
   try {
     const formData = new FormData();
     formData.append('metadata', new Blob([JSON.stringify({ file: { displayName: file.name } })], { type: 'application/json' }));
     formData.append('file', file);
-    const uploadResp = await fetch(`${API_BASE}/upload/v1beta/files?key=${apiKey}`, { method: "POST", headers: { "X-Goog-Upload-Protocol": "multipart" }, body: formData });
+
+    const uploadResp = await fetch(`${API_BASE}/upload/v1beta/files?key=${apiKey}`, {
+      method: "POST",
+      headers: { "X-Goog-Upload-Protocol": "multipart" },
+      body: formData
+    });
+
+    if (!uploadResp.ok) {
+      const errData = await uploadResp.json();
+      throw new Error(`업로드 실패: ${errData.error?.message || uploadResp.statusText}`);
+    }
+
     const { file: uploadedFile } = await uploadResp.json();
     await waitForFileActive(uploadedFile.name, apiKey);
-    const prompt = type === 'audio' ? "세부 회의록을 작성해줘." : "문서 내용을 요약해줘.";
-    const response = await callGeminiAPI([{ role: 'user', parts: [{ fileData: { mimeType: uploadedFile.mimeType, fileUri: uploadedFile.uri } }, { text: prompt }] }]);
-    addMessage('assistant', `✅ ${file.name} 처리 완료.`);
+
+    const prompt = type === 'audio' ? "회의 내용을 상세히 분석하고 회의록을 작성해줘." : "문서 내용을 핵심 위주로 요약해줘.";
+    const response = await callGeminiAPI([{
+      role: 'user',
+      parts: [
+        { fileData: { mimeType: file.type || uploadedFile.mimeType, fileUri: uploadedFile.uri } },
+        { text: prompt }
+      ]
+    }]);
+
+    addMessage('assistant', `✅ ${file.name} 처리가 완료되었습니다.`);
     await insertMarkdownToWord(response);
-  } catch (err) { addMessage('assistant', `⚠️ 파일 처리 오류: ${err.message}`); }
-  finally { setProcessing(false); }
+  } catch (err) {
+    console.error("File processing error:", err);
+    addMessage('assistant', `⚠️ 파일 처리 오류: ${err.message}`);
+  } finally {
+    setProcessing(false);
+  }
 }
 
 async function waitForFileActive(fileName, apiKey) {
