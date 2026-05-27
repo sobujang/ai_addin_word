@@ -71,7 +71,7 @@ async function callGeminiAPI(contents, specializedModel = null) {
 
   const systemInstruction = {
     role: "user",
-    parts: [{ text: `Answer in ${lang}. ${templateGuide} ${styleGuide ? '문체 가이드: ' + styleGuide : ''} Maintain a professional tone. 문서에 마크다운 기호(**, --- 등)를 직접 표기하지 말고 순수 텍스트와 보편적인 문서 구조만 출력해 주세요.` }]
+    parts: [{ text: `Answer in ${lang}. ${templateGuide} ${styleGuide ? '문체 가이드: ' + styleGuide : ''} Maintain a professional tone.` }]
   };
 
   const response = await fetch(`${API_BASE}/v1beta/models/${model}:generateContent?key=${apiKey}`, {
@@ -109,18 +109,17 @@ async function handleSendMessage() {
   }
 }
 
-/* ========== Word Interaction (Improved Context) ========== */
+/* ========== Word Interaction ========== */
 async function getSelection() {
   return Word.run(async (context) => {
     const selection = context.document.getSelection();
-    selection.load("text, isEmpty");
+    selection.load("text");
     await context.sync();
 
-    if (!selection.isEmpty) {
+    if (selection.text && selection.text.trim().length > 0) {
       return selection.text;
     } else {
-      // 선택 영역이 없을 경우 커서가 있는 단락 전체를 가져옵니다.
-      const paragraphs = selection.getParagraphs();
+      const paragraphs = selection.paragraphs;
       paragraphs.load("items");
       await context.sync();
 
@@ -134,38 +133,16 @@ async function getSelection() {
   });
 }
 
+/**
+ * 마크다운을 HTML로 변환 후, insertHtml 한 번으로 전체 삽입 (내용 잘림 방지)
+ * "반영" = 선택 영역을 교체 (Replace)
+ */
 async function replaceMarkdownInWord(md) {
   if (!md) return;
+  const html = markdownToHtml(md);
   return Word.run(async (ctx) => {
     const sel = ctx.document.getSelection();
-    sel.clear();
-    const lines = md.split(/\r?\n/); // 줄바꿈 문자 호환성 처리
-    let anchor = sel.paragraphs.getFirst();
-
-    for (let i = 0; i < lines.length; i++) {
-      let line = lines[i];
-      if (!line.trim() && i > 0) {
-        anchor = anchor.insertParagraph("", "After");
-        continue;
-      }
-      if (line.trim() === "---" || line.trim() === "***") continue;
-
-      let para = (i === 0) ? anchor : anchor.insertParagraph("", "After");
-      para.clear();
-
-      let cleanText = line.trim();
-      // 스타일 판별
-      if (cleanText.startsWith('# ')) { para.styleBuiltIn = "Heading1"; cleanText = cleanText.substring(2); }
-      else if (cleanText.startsWith('## ')) { para.styleBuiltIn = "Heading2"; cleanText = cleanText.substring(3); }
-      else if (cleanText.startsWith('### ')) { para.styleBuiltIn = "Heading3"; cleanText = cleanText.substring(4); }
-      else if (cleanText.match(/^[\*\-\+] /)) { para.styleBuiltIn = "ListBullet"; cleanText = cleanText.replace(/^[\*\-\+] /, ""); }
-      else if (cleanText.match(/^\d+\. /)) { para.styleBuiltIn = "ListNumber"; cleanText = cleanText.replace(/^\d+\. /, ""); }
-      else { para.styleBuiltIn = "Normal"; }
-
-      parseAndInsertInline(para, cleanText);
-      anchor = para;
-    }
-
+    sel.insertHtml(html, "Replace");
     if (localStorage.getItem(STORAGE_KEYS.TRACK) === 'true') {
       ctx.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
     }
@@ -174,20 +151,89 @@ async function replaceMarkdownInWord(md) {
   });
 }
 
-function parseAndInsertInline(paragraph, text) {
-  const regex = /(\*\*|__)(.*?)\1|(\*|_)(.*?)\3|(`)(.*?)\5|([^*`_]+|[*`_])/g;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    let content = match[2] || match[4] || match[6] || match[7];
-    if (content) {
-      const range = paragraph.insertText(content, "End");
-      if (match[1]) range.font.bold = true;
-      if (match[3]) range.font.italic = true;
-    }
-  }
+/**
+ * "삽입" = 커서 위치 뒤에 추가 (After)
+ */
+async function insertMarkdownToWord(md) {
+  if (!md) return;
+  const html = markdownToHtml(md);
+  return Word.run(async (ctx) => {
+    const sel = ctx.document.getSelection();
+    sel.insertHtml(html, "After");
+    await ctx.sync();
+    showToast("삽입 완료");
+  });
 }
 
-function insertMarkdownToWord(md) { replaceMarkdownInWord(md); }
+/**
+ * 마크다운 텍스트를 워드 호환 HTML로 변환합니다.
+ * 제목, 굵게, 기울임, 글머리 기호, 번호 목록을 모두 지원합니다.
+ */
+function markdownToHtml(md) {
+  const lines = md.split(/\r?\n/);
+  let html = "";
+  let inUl = false;
+  let inOl = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // 빈 줄이나 구분선 처리
+    if (!trimmed || trimmed === "---" || trimmed === "***") {
+      if (inUl) { html += "</ul>"; inUl = false; }
+      if (inOl) { html += "</ol>"; inOl = false; }
+      if (!trimmed) html += "<p>&nbsp;</p>";
+      continue;
+    }
+
+    // 리스트 판별
+    const isBullet = /^[\*\-\+] /.test(trimmed);
+    const isNumber = /^\d+\. /.test(trimmed);
+
+    // 리스트 종료 판별
+    if (!isBullet && inUl) { html += "</ul>"; inUl = false; }
+    if (!isNumber && inOl) { html += "</ol>"; inOl = false; }
+
+    // 제목
+    if (trimmed.startsWith('### ')) {
+      html += "<h3>" + inlineFormat(trimmed.substring(4)) + "</h3>";
+    } else if (trimmed.startsWith('## ')) {
+      html += "<h2>" + inlineFormat(trimmed.substring(3)) + "</h2>";
+    } else if (trimmed.startsWith('# ')) {
+      html += "<h1>" + inlineFormat(trimmed.substring(2)) + "</h1>";
+    }
+    // 글머리 기호 목록
+    else if (isBullet) {
+      if (!inUl) { html += "<ul>"; inUl = true; }
+      html += "<li>" + inlineFormat(trimmed.replace(/^[\*\-\+] /, '')) + "</li>";
+    }
+    // 번호 목록
+    else if (isNumber) {
+      if (!inOl) { html += "<ol>"; inOl = true; }
+      html += "<li>" + inlineFormat(trimmed.replace(/^\d+\. /, '')) + "</li>";
+    }
+    // 일반 단락
+    else {
+      html += "<p>" + inlineFormat(trimmed) + "</p>";
+    }
+  }
+
+  if (inUl) html += "</ul>";
+  if (inOl) html += "</ol>";
+  return html;
+}
+
+/**
+ * 인라인 마크다운(굵게, 기울임, 코드)을 HTML 태그로 변환합니다.
+ */
+function inlineFormat(text) {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+    .replace(/__(.*?)__/g, '<b>$1</b>')
+    .replace(/\*(.*?)\*/g, '<i>$1</i>')
+    .replace(/_(.*?)_/g, '<i>$1</i>')
+    .replace(/`(.*?)`/g, '<code>$1</code>');
+}
 
 /* ========== UI Helpers ========== */
 function addMessage(role, text) {
@@ -203,7 +249,6 @@ function addMessage(role, text) {
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
 
-    // 버튼 이벤트 리스너를 직접 등록하여 데이터 짤림 방지
     const btns = [
       { label: '📄 삽입', click: () => insertMarkdownToWord(text), color: '' },
       { label: '🪄 반영', click: () => replaceMarkdownInWord(text), color: '#1a73e8' },
@@ -230,7 +275,7 @@ function showThinking(show) {
   if (show && !existing) {
     const div = document.createElement('div');
     div.id = 'ai-thinking'; div.className = 'thinking-bubble';
-    div.innerHTML = `<div class="typing-dots"><span></span><span></span><span></span></div> Thinking...`;
+    div.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div> Thinking...';
     document.getElementById('chat-container').appendChild(div);
     document.getElementById('chat-container').scrollTop = document.getElementById('chat-container').scrollHeight;
   } else if (!show && existing) existing.remove();
